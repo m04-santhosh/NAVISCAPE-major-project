@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    @apply bg-surface-950 text-surface-100 font-sans antialiased;
+    min-height: 100vh;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-surface-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-surface-600 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-surface-500; }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-surface-800/50 backdrop-blur-lg border border-surface-700/50 rounded-2xl;
+  }
+  .glass-card-light {
+    @apply bg-white/80 backdrop-blur-lg border border-surface-200 rounded-2xl;
+  }
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-400 via-accent-400 to-pink-400 bg-clip-text text-transparent;
+  }
+  .gradient-bg {
+    @apply bg-gradient-to-r from-primary-600 via-accent-600 to-pink-600;
+  }
+  .gradient-border {
+    @apply border border-transparent bg-gradient-to-r from-primary-500 to-accent-500;
+  }
+  .btn-primary {
+    @apply px-6 py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-primary-600 to-accent-600 hover:from-primary-500 hover:to-accent-500 transition-all duration-300 shadow-lg shadow-primary-600/25 hover:shadow-primary-500/40 hover:-translate-y-0.5 active:translate-y-0;
+  }
+  .btn-secondary {
+    @apply px-6 py-3 rounded-xl font-semibold text-surface-200 border border-surface-600 hover:border-primary-500 hover:text-primary-400 transition-all duration-300 hover:-translate-y-0.5;
+  }
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl bg-surface-800/80 border border-surface-600 text-surface-100 placeholder-surface-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none transition-all duration-300;
+  }
+  .stat-card {
+    @apply glass-card p-6 hover:border-primary-500/50 transition-all duration-500 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary-500/10;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-surface-400 hover:text-primary-400 hover:bg-surface-800/80 transition-all duration-300;
+  }
+  .nav-link-active {
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-primary-400 bg-primary-500/10 border border-primary-500/20;
+  }
+  .badge {
+    @apply px-3 py-1 rounded-full text-xs font-semibold;
+  }
+  .badge-low { @apply bg-green-500/20 text-green-400; }
+  .badge-medium { @apply bg-yellow-500/20 text-yellow-400; }
+  .badge-high { @apply bg-orange-500/20 text-orange-400; }
+  .badge-critical { @apply bg-red-500/20 text-red-400; }
+}
+
+/* Light mode overrides */
+.light body, body.light {
+  @apply bg-surface-50 text-surface-900;
+}
+
+/* Leaflet overrides */
+.leaflet-container { z-index: 1; border-radius: 1rem; }
+.leaflet-control-container .leaflet-routing-container { display: none !important; }
+.leaflet-control-zoom { border-radius: 12px !important; overflow: hidden; }
