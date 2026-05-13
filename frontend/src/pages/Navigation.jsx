@@ -334,7 +334,6 @@ export default function Navigation() {
             </div>
           )}
         </div>
-      </div>
 
       {/* ===== NAVIGATION HUD (shown during live nav) ===== */}
       {isNavigating && (
