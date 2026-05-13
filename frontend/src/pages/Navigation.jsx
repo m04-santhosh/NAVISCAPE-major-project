@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker 
 import L from 'leaflet';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft } from 'react-icons/hi';
+import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft, HiOutlineLocationMarker, HiNavigation } from 'react-icons/hi';
 import 'leaflet/dist/leaflet.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -130,7 +130,8 @@ export default function Navigation() {
   const [navDistLeft, setNavDistLeft] = useState(0);
   const [navInstruction, setNavInstruction] = useState({ icon: HiArrowUp, text: 'Head straight' });
   const [travelledPath, setTravelledPath] = useState([]);
-  const timerRef = useRef(null);
+  const watchIdRef = useRef(null);
+  const mapRef = useRef(null);
 
   const filteredSource = PRESET_LOCATIONS.filter(l => l.name.toLowerCase().includes(source.toLowerCase()));
   const filteredDest = PRESET_LOCATIONS.filter(l => l.name.toLowerCase().includes(dest.toLowerCase()));
@@ -161,83 +162,108 @@ export default function Navigation() {
     try { await api.post('/navigate', { source_lat: sourceCoord[0], source_lng: sourceCoord[1], dest_lat: destCoord[0], dest_lng: destCoord[1], source_name: source, dest_name: dest, route_type: route.route_type }); } catch {}
   };
 
+  const locateUser = useCallback(() => {
+    if (!("geolocation" in navigator)) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const pos = [latitude, longitude];
+        setSourceCoord(pos);
+        setSource('Your Location');
+        setBounds(L.latLngBounds([pos]));
+        toast.success("Location updated");
+      },
+      () => toast.error("Could not find your location")
+    );
+  }, []);
+
+  /* ---------- INITIAL LOCALIZATION ---------- */
+  useEffect(() => {
+    locateUser();
+  }, [locateUser]);
+
   /* ---------- LIVE NAVIGATION ---------- */
   const startNavigation = useCallback(() => {
     if (!selectedRoute) { toast.error('Select a route first'); return; }
-    const pts = interpolateRoute(selectedRoute.waypoints, 300);
-    setNavPoints(pts);
-    setNavIndex(0);
-    setNavPosition(pts[0]);
-    setNavBearing(pts.length > 1 ? bearing(pts[0], pts[1]) : 0);
-    setNavProgress(0);
-    setTravelledPath([pts[0]]);
+    if (!("geolocation" in navigator)) { toast.error('Geolocation not supported'); return; }
+
     setIsNavigating(true);
-    setNavDistLeft(selectedRoute.distance_km);
-    setNavETA(selectedRoute.duration_min);
+    setNavPoints(selectedRoute.waypoints);
+    setTravelledPath([sourceCoord]);
+    setNavPosition(sourceCoord);
     saveRoute(selectedRoute);
-    toast.success('Navigation started! 🚗');
-  }, [selectedRoute]);
+    toast.success('Real-time tracking started! 🚗');
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude, heading, speed } = position.coords;
+        const currentPos = [latitude, longitude];
+        
+        setNavPosition(currentPos);
+        setTravelledPath(prev => [...prev, currentPos]);
+        setNavBearing(heading || 0);
+        setNavSpeed(Math.round((speed || 0) * 3.6)); // Convert m/s to km/h
+
+        // Find progress along route
+        if (selectedRoute.waypoints.length > 1) {
+          // Simplistic progress: find nearest waypoint
+          let minD = Infinity;
+          let nearestIdx = 0;
+          selectedRoute.waypoints.forEach((p, i) => {
+            const d = Math.sqrt(Math.pow(p[0] - latitude, 2) + Math.pow(p[1] - longitude, 2));
+            if (d < minD) { minD = d; nearestIdx = i; }
+          });
+          
+          const pct = (nearestIdx / (selectedRoute.waypoints.length - 1)) * 100;
+          setNavProgress(pct);
+          setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
+          setNavETA(+(selectedRoute.duration_min * (1 - pct / 100)).toFixed(1));
+
+          // Instructions
+          if (nearestIdx < selectedRoute.waypoints.length - 1) {
+            const dir = turnDirection(
+              selectedRoute.waypoints[Math.max(0, nearestIdx - 1)],
+              currentPos,
+              selectedRoute.waypoints[nearestIdx + 1]
+            );
+            setNavInstruction(dir);
+          }
+
+          if (pct > 95) {
+            setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
+          }
+          
+          if (pct >= 100) {
+            stopNavigation();
+            toast.success('You have arrived! 🎉');
+          }
+        }
+      },
+      (error) => toast.error("Location tracking failed"),
+      { enableHighAccuracy: true, maximumAge: 1000 }
+    );
+  }, [selectedRoute, sourceCoord]);
 
   const stopNavigation = useCallback(() => {
     setIsNavigating(false);
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
-    toast('Navigation ended', { icon: '🛑' });
+    if (watchIdRef.current) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    toast('Tracking stopped', { icon: '🛑' });
   }, []);
 
-  // Animation loop
-  useEffect(() => {
-    if (!isNavigating || navPoints.length === 0) return;
-    timerRef.current = setInterval(() => {
-      setNavIndex(prev => {
-        const next = prev + 1;
-        if (next >= navPoints.length) {
-          clearInterval(timerRef.current);
-          setIsNavigating(false);
-          toast.success('You have arrived! 🎉');
-          return prev;
-        }
-        const pos = navPoints[next];
-        setNavPosition(pos);
-        setTravelledPath(tp => [...tp, pos]);
-        // Bearing
-        if (next < navPoints.length - 1) {
-          setNavBearing(bearing(pos, navPoints[next + 1]));
-        }
-        // Progress
-        const pct = (next / (navPoints.length - 1)) * 100;
-        setNavProgress(pct);
-        // Speed simulation
-        setNavSpeed(Math.round(25 + Math.random() * 30));
-        // ETA & distance
-        if (selectedRoute) {
-          setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
-          setNavETA(+(selectedRoute.duration_min * (1 - pct / 100)).toFixed(1));
-        }
-        // Turn instruction every ~15 steps
-        if (next % 15 === 0 && next > 0 && next < navPoints.length - 2) {
-          const dir = turnDirection(navPoints[next - 5], pos, navPoints[Math.min(next + 15, navPoints.length - 1)]);
-          setNavInstruction(dir);
-        }
-        if (next > navPoints.length * 0.95) {
-          setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
-        }
-        return next;
-      });
-    }, 120); // move every 120ms
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isNavigating, navPoints]);
+  // Remove the old animation useEffect
 
   const srcIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });
   const dstIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });
 
   return (
-    <div className="h-[calc(100vh-2rem)] flex flex-col lg:flex-row gap-4 animate-fade-in relative">
+    <div className="h-[calc(100vh-2rem)] flex flex-col lg:flex-row gap-4 animate-fade-in relative overflow-hidden">
 
-      {/* ===== LEFT PANEL ===== */}
-      {!isNavigating && (
-        <div className="lg:w-96 space-y-4 flex-shrink-0 overflow-y-auto max-h-[calc(100vh-2rem)]">
-          <div className="glass-card p-5">
+      {/* ===== LEFT PANEL / SEARCH ===== */}
+      <div className={`lg:w-96 space-y-4 flex-shrink-0 transition-all duration-500 ${isNavigating ? 'hidden lg:block' : 'block'} overflow-y-auto max-h-full`}>
+        <div className="glass-card p-5">
             <h2 className="text-lg font-semibold text-surface-200 mb-4 flex items-center gap-2">
               <HiLocationMarker className="text-primary-400" /> Route Planner
             </h2>
@@ -312,72 +338,51 @@ export default function Navigation() {
 
       {/* ===== NAVIGATION HUD (shown during live nav) ===== */}
       {isNavigating && (
-        <div className="lg:w-96 flex-shrink-0 flex flex-col gap-3">
-          {/* Turn instruction card */}
-          <div className="glass-card p-6 border-l-4 border-primary-400">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-primary-500/20 flex items-center justify-center">
-                <navInstruction.icon className="w-8 h-8 text-primary-400" />
+        <div className="absolute top-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-96 z-[1000] flex flex-col gap-3 pointer-events-none">
+          <div className="pointer-events-auto">
+            {/* Turn instruction card */}
+            <div className="glass-card p-6 border-l-4 border-primary-400 shadow-2xl">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-primary-500/20 flex items-center justify-center">
+                  <navInstruction.icon className="w-8 h-8 text-primary-400" />
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-surface-100">{navInstruction.text}</p>
+                  <p className="text-sm text-surface-400">on current road</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xl font-bold text-surface-100">{navInstruction.text}</p>
-                <p className="text-sm text-surface-400">on current road</p>
+            </div>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-3 mt-3">
+              <div className="glass-card p-3 text-center bg-surface-900/80">
+                <p className="text-xl font-bold text-primary-400">{navSpeed}</p>
+                <p className="text-[10px] uppercase tracking-wider text-surface-500">km/h</p>
+              </div>
+              <div className="glass-card p-3 text-center bg-surface-900/80">
+                <p className="text-xl font-bold text-surface-100">{navDistLeft}</p>
+                <p className="text-[10px] uppercase tracking-wider text-surface-500">km left</p>
+              </div>
+              <div className="glass-card p-3 text-center bg-surface-900/80">
+                <p className="text-xl font-bold text-green-400">{navETA}</p>
+                <p className="text-[10px] uppercase tracking-wider text-surface-500">min</p>
               </div>
             </div>
-          </div>
 
-          {/* Stats grid */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold text-primary-400">{navSpeed}</p>
-              <p className="text-xs text-surface-500">km/h</p>
+            {/* Progress bar */}
+            <div className="glass-card p-3 mt-3 bg-surface-900/80">
+              <div className="w-full h-2 rounded-full bg-surface-800 overflow-hidden">
+                <div className="h-full rounded-full bg-gradient-to-r from-primary-500 to-green-400 transition-all duration-200"
+                  style={{ width: `${navProgress}%` }} />
+              </div>
             </div>
-            <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold text-surface-100">{navDistLeft}</p>
-              <p className="text-xs text-surface-500">km left</p>
-            </div>
-            <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold text-green-400">{navETA}</p>
-              <p className="text-xs text-surface-500">min ETA</p>
-            </div>
-          </div>
 
-          {/* Progress bar */}
-          <div className="glass-card p-4">
-            <div className="flex justify-between text-xs text-surface-400 mb-2">
-              <span>{source}</span>
-              <span>{Math.round(navProgress)}%</span>
-              <span>{dest}</span>
-            </div>
-            <div className="w-full h-3 rounded-full bg-surface-800 overflow-hidden">
-              <div className="h-full rounded-full bg-gradient-to-r from-primary-500 to-green-400 transition-all duration-200"
-                style={{ width: `${navProgress}%` }} />
-            </div>
+            {/* Stop button */}
+            <button onClick={stopNavigation}
+              className="w-full mt-3 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 shadow-lg transition-all duration-300 flex items-center justify-center gap-2">
+              <HiStop className="w-5 h-5" /> Stop Navigation
+            </button>
           </div>
-
-          {/* Route info */}
-          <div className="glass-card p-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-surface-400">Route</span>
-              <span className="font-medium text-surface-200">{selectedRoute?.label}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm mt-1">
-              <span className="text-surface-400">Safety</span>
-              <span className={`font-bold ${selectedRoute?.safety_score >= 80 ? 'text-green-400' : 'text-yellow-400'}`}>
-                {selectedRoute?.safety_score}/100
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-sm mt-1">
-              <span className="text-surface-400">Total Distance</span>
-              <span className="text-surface-200">{selectedRoute?.distance_km} km</span>
-            </div>
-          </div>
-
-          {/* Stop button */}
-          <button onClick={stopNavigation}
-            className="w-full py-4 rounded-xl font-bold text-white text-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-400 hover:to-red-500 shadow-lg shadow-red-600/30 transition-all duration-300 flex items-center justify-center gap-3">
-            <HiStop className="w-6 h-6" /> Stop Navigation
-          </button>
         </div>
       )}
 
@@ -423,6 +428,22 @@ export default function Navigation() {
             </CircleMarker>
           ))}
         </MapContainer>
+
+        {/* Map Overlay Buttons */}
+        <div className="absolute bottom-6 right-6 z-[1000] flex flex-col gap-2">
+          {!isNavigating && (
+            <button onClick={locateUser} title="Locate Me"
+              className="p-3 rounded-full bg-surface-800 border border-surface-700 text-primary-400 hover:bg-surface-700 shadow-lg transition-all active:scale-95">
+              <HiOutlineLocationMarker className="w-6 h-6" />
+            </button>
+          )}
+          {isNavigating && (
+            <button onClick={() => setNavPosition([...navPosition])} title="Recenter"
+              className="p-3 rounded-full bg-primary-600 text-white hover:bg-primary-500 shadow-lg transition-all active:scale-95">
+              <HiNavigation className="w-6 h-6" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
