@@ -18,8 +18,14 @@ from .routers import auth, navigation, traffic, prediction, admin
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     # Startup: initialize database and create default admin
-    init_db()
-    _create_default_admin()
+    try:
+        init_db()
+        _create_default_admin()
+        print("Database initialized.")
+    except Exception as e:
+        import traceback
+        print("Database initialization skipped:", e)
+        traceback.print_exc()
     print(f"\n{'='*60}")
     print(f"  NAVISCAPE v{settings.APP_VERSION} - Server Started")
     print(f"  API Docs: http://localhost:8000/docs")
