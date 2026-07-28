@@ -1,10 +1,17 @@
-import axios from 'axios';
+import axios from "axios";
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000/api',
-  headers: { 'Content-Type': 'application/json' },
+  baseURL:
+    import.meta.env.VITE_API_URL ||
+    "https://naviscape-major-project-6xwc.vercel.app/api",
+  headers: {
+    "Content-Type": "application/json",
+  },
   timeout: 15000,
 });
+
+export default api;
+
 
 // Request interceptor — attach token
 api.interceptors.request.use((config) => {
@@ -26,5 +33,3 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
-
-export default api;
