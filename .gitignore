@@ -8,6 +8,7 @@ build/
 venv/
 .env
 *.db
+*.db-*
 
 # ML Models (large files)
 ml/models/*.h5

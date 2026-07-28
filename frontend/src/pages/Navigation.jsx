@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker 
 import L from 'leaflet';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft, HiOutlineLocationMarker, HiNavigation } from 'react-icons/hi';
+import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft, HiOutlineLocationMarker, HiPaperAirplane } from 'react-icons/hi';
 import 'leaflet/dist/leaflet.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -439,7 +439,7 @@ export default function Navigation() {
           {isNavigating && (
             <button onClick={() => setNavPosition([...navPosition])} title="Recenter"
               className="p-3 rounded-full bg-primary-600 text-white hover:bg-primary-500 shadow-lg transition-all active:scale-95">
-              <HiNavigation className="w-6 h-6" />
+              <HiPaperAirplane className="w-6 h-6" />
             </button>
           )}
         </div>
