@@ -17,10 +17,10 @@ import uvicorn
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:app",
+        "backend.app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        reload_dirs=[os.path.join(PROJECT_ROOT, "app")],
+        reload_dirs=[os.path.join(PROJECT_ROOT, "backend", "app")],
         log_level="info",
     )
