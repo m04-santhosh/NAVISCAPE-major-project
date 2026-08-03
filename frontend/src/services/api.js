@@ -3,7 +3,7 @@ import axios from "axios";
 const api = axios.create({
   baseURL:
     import.meta.env.VITE_API_URL ||
-    "https://naviscape-major-project-6xwc.vercel.app/api",
+    "http://127.0.0.1:8000/api",
   headers: {
     "Content-Type": "application/json",
   },
@@ -26,9 +26,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('naviscape-token');
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
+      // No redirect since login page is removed
     }
     return Promise.reject(error);
   }

@@ -5,8 +5,6 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/layout/Sidebar';
 
 import Home from './pages/Home';
-import Login from './pages/Login';
-import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Navigation from './pages/Navigation';
 import Analytics from './pages/Analytics';
@@ -75,8 +73,6 @@ export default function App() {
           <Routes>
             {/* Public routes */}
             <Route path="/" element={<Home />} />
-            <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-            <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
 
             {/* Protected routes */}
             <Route element={<PrivateRoute />}>

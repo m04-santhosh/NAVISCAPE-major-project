@@ -80,10 +80,6 @@ export default function Sidebar() {
             </div>
           )}
         </div>
-        <button onClick={handleLogout} className="nav-link w-full text-red-400 hover:text-red-300 hover:bg-red-500/10">
-          <HiLogout className="w-5 h-5" />
-          {!collapsed && <span>Logout</span>}
-        </button>
       </div>
     </div>
   );

@@ -51,35 +51,20 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 async def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
     """
     FastAPI dependency: extracts and validates the current user from JWT.
-    Raises 401 if token is missing/invalid or user not found.
+    (Currently bypassed - always returns a mock admin user)
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
+    return User(
+        id=1,
+        username="admin",
+        email="admin@naviscape.com",
+        full_name="Admin (Demo)",
+        is_admin=True,
+        is_active=True
     )
-
-    if token is None:
-        raise credentials_exception
-
-    payload = decode_token(token)
-    if payload is None:
-        raise credentials_exception
-
-    username: str = payload.get("sub")
-    if username is None:
-        raise credentials_exception
-
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
-        raise credentials_exception
-
-    return user
 
 
 async def get_current_admin(
@@ -95,16 +80,14 @@ async def get_current_admin(
 
 
 async def get_optional_user(
-    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
     """FastAPI dependency: returns current user or None (no error if unauthenticated)."""
-    if token is None:
-        return None
-    payload = decode_token(token)
-    if payload is None:
-        return None
-    username = payload.get("sub")
-    if username is None:
-        return None
-    return db.query(User).filter(User.username == username).first()
+    return User(
+        id=1,
+        username="admin",
+        email="admin@naviscape.com",
+        full_name="Admin (Demo)",
+        is_admin=True,
+        is_active=True
+    )

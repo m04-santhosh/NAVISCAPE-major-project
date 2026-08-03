@@ -131,7 +131,6 @@ export default function Navigation() {
   const [navInstruction, setNavInstruction] = useState({ icon: HiArrowUp, text: 'Head straight' });
   const [travelledPath, setTravelledPath] = useState([]);
   const watchIdRef = useRef(null);
-  const mapRef = useRef(null);
 
   const filteredSource = PRESET_LOCATIONS.filter(l => l.name.toLowerCase().includes(source.toLowerCase()));
   const filteredDest = PRESET_LOCATIONS.filter(l => l.name.toLowerCase().includes(dest.toLowerCase()));
@@ -159,7 +158,7 @@ export default function Navigation() {
   };
 
   const saveRoute = async (route) => {
-    try { await api.post('/navigate', { source_lat: sourceCoord[0], source_lng: sourceCoord[1], dest_lat: destCoord[0], dest_lng: destCoord[1], source_name: source, dest_name: dest, route_type: route.route_type }); } catch {}
+    try { await api.post('/navigate', { source_lat: sourceCoord[0], source_lng: sourceCoord[1], dest_lat: destCoord[0], dest_lng: destCoord[1], source_name: source, dest_name: dest, route_type: route.route_type }); } catch (err) { console.error(err); }
   };
 
   const locateUser = useCallback(() => {
@@ -183,7 +182,16 @@ export default function Navigation() {
   }, [locateUser]);
 
   /* ---------- LIVE NAVIGATION ---------- */
-  const startNavigation = useCallback(() => {
+  const stopNavigation = () => {
+    setIsNavigating(false);
+    if (watchIdRef.current) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    toast('Tracking stopped', { icon: '🛑' });
+  };
+
+  const startNavigation = () => {
     if (!selectedRoute) { toast.error('Select a route first'); return; }
     if (!("geolocation" in navigator)) { toast.error('Geolocation not supported'); return; }
 
@@ -239,19 +247,10 @@ export default function Navigation() {
           }
         }
       },
-      (error) => toast.error("Location tracking failed"),
+      () => toast.error("Location tracking failed"),
       { enableHighAccuracy: true, maximumAge: 1000 }
     );
-  }, [selectedRoute, sourceCoord]);
-
-  const stopNavigation = useCallback(() => {
-    setIsNavigating(false);
-    if (watchIdRef.current) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
-    toast('Tracking stopped', { icon: '🛑' });
-  }, []);
+  };
 
   // Remove the old animation useEffect
 

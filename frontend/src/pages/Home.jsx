@@ -19,7 +19,7 @@ const stats = [
 ];
 
 export default function Home() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth(); // kept for potential other uses but mostly redundant now
 
   return (
     <div className="min-h-screen bg-surface-950 overflow-hidden">
@@ -46,8 +46,8 @@ export default function Home() {
             Predictive Traffic Analysis & Risk-Aware Routing powered by LSTM, XGBoost, and graph algorithms
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link to={isAuthenticated ? '/dashboard' : '/login'} className="btn-primary text-lg px-8 py-4">
-              {isAuthenticated ? 'Go to Dashboard' : 'Get Started'} →
+            <Link to="/dashboard" className="btn-primary text-lg px-8 py-4">
+              Go to Dashboard →
             </Link>
             <Link to="/about" className="btn-secondary text-lg px-8 py-4">Learn More</Link>
           </div>
