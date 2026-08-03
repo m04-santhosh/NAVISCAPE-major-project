@@ -1,9 +1,9 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import {
-  HiHome, HiMap, HiChartBar, HiShieldCheck, HiCog,
-  HiLogout, HiMenu, HiX, HiSun, HiMoon, HiUserCircle, HiInformationCircle
+  HiHome, HiMap, HiChartBar, HiShieldCheck,
+  HiMenu, HiX, HiSun, HiMoon, HiUserCircle, HiInformationCircle
 } from 'react-icons/hi';
 import { useState } from 'react';
 
@@ -19,13 +19,10 @@ const adminItems = [
 ];
 
 export default function Sidebar() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
   const { isDark, toggleTheme } = useTheme();
-  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  const handleLogout = () => { logout(); navigate('/login'); };
 
   const linkClass = ({ isActive }) => isActive ? 'nav-link-active' : 'nav-link';
 
