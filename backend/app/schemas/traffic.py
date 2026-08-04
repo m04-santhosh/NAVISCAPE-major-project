@@ -35,6 +35,9 @@ class RouteRequest(BaseModel):
     source_name: Optional[str] = None
     dest_name: Optional[str] = None
     route_type: str = "balanced"  # shortest, safest, balanced
+    distance_km: Optional[float] = None
+    duration_min: Optional[float] = None
+    safety_score: Optional[float] = None
 
 
 class RouteResponse(BaseModel):

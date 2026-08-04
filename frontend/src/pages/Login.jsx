@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { HiMail, HiLockClosed, HiUser, HiArrowRight } from 'react-icons/hi';
+import { HiLockClosed, HiUser, HiArrowRight } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
 export default function Login() {
@@ -25,19 +25,12 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-surface-950 relative overflow-hidden">
-      {/* Background effects */}
-      <div className="absolute inset-0">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary-600/20 rounded-full blur-3xl animate-pulse-slow" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent-600/20 rounded-full blur-3xl animate-pulse-slow" style={{animationDelay: '1.5s'}} />
-      </div>
-
-      <div className="relative w-full max-w-md animate-slide-up">
-        {/* Logo */}
+    <div className="min-h-screen flex items-center justify-center p-4 bg-surface-950">
+      <div className="w-full max-w-md animate-fade-in">
+        {/* Header */}
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl gradient-bg flex items-center justify-center font-bold text-white text-2xl mx-auto mb-4 shadow-lg shadow-primary-500/30">N</div>
-          <h1 className="text-3xl font-bold gradient-text">NAVISCAPE</h1>
-          <p className="text-surface-400 mt-1">Sign in to your account</p>
+          <h1 className="text-3xl font-bold text-surface-100 tracking-tight">NAVISCAPE</h1>
+          <p className="text-surface-400 mt-2">Sign in to your account</p>
         </div>
 
         {/* Form */}
@@ -69,8 +62,8 @@ export default function Login() {
             <Link to="/register" className="text-primary-400 hover:text-primary-300 font-medium">Create one</Link>
           </div>
 
-          <div className="mt-4 p-3 rounded-xl bg-surface-800/50 border border-surface-700/50">
-            <p className="text-xs text-surface-500 text-center">Demo: <span className="text-primary-400">admin</span> / <span className="text-primary-400">admin123</span></p>
+          <div className="mt-4 p-3 rounded-lg bg-surface-800/40 border border-surface-700/40">
+            <p className="text-xs text-surface-500 text-center">Demo: <span className="text-surface-300">admin</span> / <span className="text-surface-300">admin123</span></p>
           </div>
         </div>
       </div>

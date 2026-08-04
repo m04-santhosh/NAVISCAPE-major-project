@@ -67,8 +67,8 @@ export default function Analytics() {
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-surface-100">Traffic <span className="gradient-text">Analytics</span></h1>
-        <p className="text-surface-400 mt-1">AI-powered traffic predictions and risk analysis</p>
+        <h1 className="text-2xl md:text-3xl font-bold text-surface-100">Traffic Analytics</h1>
+        <p className="text-surface-400 mt-1">Traffic predictions and risk analysis from LSTM and XGBoost models</p>
       </div>
 
       {/* Junction Selector */}

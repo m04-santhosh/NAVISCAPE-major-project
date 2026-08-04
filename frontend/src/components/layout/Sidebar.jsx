@@ -29,19 +29,17 @@ export default function Sidebar() {
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-6 border-b border-surface-700/50">
-        <div className="w-10 h-10 rounded-xl gradient-bg flex items-center justify-center font-bold text-white text-lg">N</div>
-        {!collapsed && (
-          <div className="animate-fade-in">
-            <h1 className="text-lg font-bold gradient-text">NAVISCAPE</h1>
-            <p className="text-xs text-surface-400">AI Navigation</p>
-          </div>
+      <div className="flex items-center gap-3 px-5 py-6 border-b border-surface-700/40">
+        {!collapsed ? (
+          <h1 className="text-lg font-bold text-surface-100 tracking-tight">NAVISCAPE</h1>
+        ) : (
+          <span className="text-lg font-bold text-surface-100">N</span>
         )}
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <p className={`text-xs font-semibold text-surface-500 uppercase px-4 mb-2 ${collapsed ? 'hidden' : ''}`}>Main Menu</p>
+        <p className={`text-xs font-medium text-surface-500 uppercase tracking-wider px-4 mb-2 ${collapsed ? 'hidden' : ''}`}>Menu</p>
         {navItems.map(item => (
           <NavLink key={item.to} to={item.to} className={linkClass} onClick={() => setMobileOpen(false)}>
             <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -51,7 +49,7 @@ export default function Sidebar() {
 
         {isAdmin && (
           <>
-            <p className={`text-xs font-semibold text-surface-500 uppercase px-4 mt-6 mb-2 ${collapsed ? 'hidden' : ''}`}>Admin</p>
+            <p className={`text-xs font-medium text-surface-500 uppercase tracking-wider px-4 mt-6 mb-2 ${collapsed ? 'hidden' : ''}`}>Admin</p>
             {adminItems.map(item => (
               <NavLink key={item.to} to={item.to} className={linkClass} onClick={() => setMobileOpen(false)}>
                 <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -63,13 +61,13 @@ export default function Sidebar() {
       </nav>
 
       {/* Bottom section */}
-      <div className="border-t border-surface-700/50 p-3 space-y-2">
+      <div className="border-t border-surface-700/40 p-3 space-y-2">
         <button onClick={toggleTheme} className="nav-link w-full">
           {isDark ? <HiSun className="w-5 h-5" /> : <HiMoon className="w-5 h-5" />}
           {!collapsed && <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
         <div className="nav-link cursor-default">
-          <HiUserCircle className="w-5 h-5 text-primary-400" />
+          <HiUserCircle className="w-5 h-5 text-surface-400" />
           {!collapsed && (
             <div className="overflow-hidden">
               <p className="text-sm font-medium text-surface-200 truncate">{user?.full_name || user?.username}</p>
@@ -98,14 +96,14 @@ export default function Sidebar() {
 
       {/* Sidebar */}
       <aside className={`
-        fixed top-0 left-0 h-full z-40 glass-card border-r border-surface-700/50 transition-all duration-300
+        fixed top-0 left-0 h-full z-40 glass-card border-r border-surface-700/40 transition-all duration-300
         ${collapsed ? 'w-20' : 'w-64'}
         ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
         {/* Collapse toggle (desktop) */}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="hidden lg:flex absolute -right-3 top-8 w-6 h-6 rounded-full bg-surface-700 border border-surface-600 items-center justify-center text-surface-300 hover:text-primary-400 hover:border-primary-500 transition-all"
+          className="hidden lg:flex absolute -right-3 top-8 w-6 h-6 rounded-full bg-surface-700 border border-surface-600 items-center justify-center text-surface-300 hover:text-surface-100 hover:border-surface-500 transition-colors"
         >
           {collapsed ? '→' : '←'}
         </button>

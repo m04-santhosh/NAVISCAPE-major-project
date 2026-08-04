@@ -25,17 +25,11 @@ export default function Register() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-surface-950 relative overflow-hidden">
-      <div className="absolute inset-0">
-        <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-accent-600/20 rounded-full blur-3xl animate-pulse-slow" />
-        <div className="absolute bottom-1/3 left-1/4 w-96 h-96 bg-primary-600/20 rounded-full blur-3xl animate-pulse-slow" style={{animationDelay: '1.5s'}} />
-      </div>
-
-      <div className="relative w-full max-w-md animate-slide-up">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-surface-950">
+      <div className="w-full max-w-md animate-fade-in">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl gradient-bg flex items-center justify-center font-bold text-white text-2xl mx-auto mb-4 shadow-lg shadow-primary-500/30">N</div>
-          <h1 className="text-3xl font-bold gradient-text">NAVISCAPE</h1>
-          <p className="text-surface-400 mt-1">Create your account</p>
+          <h1 className="text-3xl font-bold text-surface-100 tracking-tight">NAVISCAPE</h1>
+          <p className="text-surface-400 mt-2">Create your account</p>
         </div>
 
         <div className="glass-card p-8">

@@ -67,7 +67,7 @@ export default function AdminPanel() {
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-surface-100">Admin <span className="gradient-text">Panel</span></h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-surface-100">Admin Panel</h1>
         <p className="text-surface-400 mt-1">Manage datasets, users, and monitor system performance</p>
       </div>
 
@@ -86,15 +86,13 @@ export default function AdminPanel() {
       {activeTab === 'overview' && stats && (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Total Users', value: stats.total_users, color: 'from-cyan-500 to-blue-500' },
-            { label: 'Total Routes', value: stats.total_routes, color: 'from-purple-500 to-pink-500' },
-            { label: 'Traffic Records', value: stats.total_traffic_records, color: 'from-green-500 to-emerald-500' },
-            { label: 'Accident Records', value: stats.total_accident_records, color: 'from-orange-500 to-red-500' },
+            { label: 'Total Users', value: stats.total_users, icon: HiUsers },
+            { label: 'Total Routes', value: stats.total_routes, icon: HiChartBar },
+            { label: 'Traffic Records', value: stats.total_traffic_records, icon: HiUpload },
+            { label: 'Accident Records', value: stats.total_accident_records, icon: HiRefresh },
           ].map((card, i) => (
             <div key={i} className="stat-card">
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-r ${card.color} flex items-center justify-center mb-3`}>
-                <span className="text-white font-bold text-sm">{card.value}</span>
-              </div>
+              <card.icon className="w-5 h-5 text-primary-400 mb-3" />
               <p className="text-2xl font-bold text-surface-100">{card.value}</p>
               <p className="text-sm text-surface-400">{card.label}</p>
             </div>
