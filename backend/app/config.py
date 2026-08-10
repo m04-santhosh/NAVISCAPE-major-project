@@ -17,8 +17,12 @@ class Settings:
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
     
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./naviscape.db")
+    # Database (resolve path relative to backend root)
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(__file__)), 'naviscape.db')}"
+    )
+
     
     # JWT Authentication
     SECRET_KEY: str = os.getenv("SECRET_KEY", "naviscape-super-secret-key-change-in-production-2024")

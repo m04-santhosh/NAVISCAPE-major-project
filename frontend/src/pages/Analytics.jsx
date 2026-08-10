@@ -12,6 +12,8 @@ import 'leaflet/dist/leaflet.css';
 export default function Analytics() {
   const [forecast, setForecast] = useState([]);
   const [accidentHeatmap, setAccidentHeatmap] = useState([]);
+  const [accidentStats, setAccidentStats] = useState(null);
+  const [accidentClusters, setAccidentClusters] = useState([]);
   const [selectedJunction, setSelectedJunction] = useState(1);
   const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -20,16 +22,21 @@ export default function Analytics() {
 
   const loadData = async () => {
     try {
-      const [forecastRes, heatmapRes] = await Promise.all([
+      const [forecastRes, heatmapRes, statsRes, clustersRes] = await Promise.all([
         api.get('/predict/congestion-forecast'),
-        api.get('/predict/accident-heatmap'),
+        api.get('/accidents/heatmap?limit=3000'),
+        api.get('/accidents/stats'),
+        api.get('/accidents/clusters'),
       ]);
       setForecast(forecastRes.data);
       setAccidentHeatmap(heatmapRes.data);
+      setAccidentStats(statsRes.data);
+      setAccidentClusters(clustersRes.data);
       // Load prediction for default junction
       await loadPrediction(1);
     } catch (err) { console.error(err); } finally { setLoading(false); }
   };
+
 
   const loadPrediction = async (jid) => {
     try {
@@ -152,28 +159,71 @@ export default function Analytics() {
           </div>
         </div>
 
-        {/* Accident Risk Heatmap */}
+        {/* Karnataka Accident Risk Heatmap */}
         <div className="glass-card p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <HiShieldExclamation className="text-red-400 w-5 h-5" />
-            <h3 className="text-lg font-semibold text-surface-200">Accident Risk Heatmap</h3>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <HiShieldExclamation className="text-red-400 w-5 h-5" />
+              <h3 className="text-lg font-semibold text-surface-200">Karnataka Accident Density & Risk Map</h3>
+            </div>
+            {accidentStats && (
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/30">
+                {accidentStats.records_with_coordinates?.toLocaleString()} Geo-tagged Incidents
+              </span>
+            )}
           </div>
-          <div className="h-72 rounded-xl overflow-hidden">
-            <MapContainer center={[12.9716, 77.5946]} zoom={11} className="h-full w-full" style={{ borderRadius: '0.75rem' }}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OSM" />
+          <div className="h-72 rounded-xl overflow-hidden relative">
+            <MapContainer center={[15.3173, 75.7139]} zoom={7} className="h-full w-full" style={{ borderRadius: '0.75rem' }}>
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
               {accidentHeatmap.map((pt, i) => (
-                <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.intensity * 10 + 3}
+                <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.intensity * 7 + 2}
                   pathOptions={{
-                    color: pt.severity >= 4 ? '#ef4444' : pt.severity >= 3 ? '#f97316' : '#eab308',
-                    fillOpacity: 0.4, weight: 1,
+                    color: pt.severity === 'Fatal' ? '#ef4444' : pt.severity === 'Grievous Injury' ? '#f97316' : '#eab308',
+                    fillColor: pt.severity === 'Fatal' ? '#ef4444' : pt.severity === 'Grievous Injury' ? '#f97316' : '#eab308',
+                    fillOpacity: 0.5, weight: 1,
                   }}>
-                  <Popup>Severity: {pt.severity}/5 | Risk: {(pt.intensity*100).toFixed(0)}%</Popup>
+                  <Popup>
+                    <div className="text-xs space-y-1">
+                      <p className="font-bold">{pt.district || 'Location'}</p>
+                      <p>Severity: <span className="font-semibold text-red-500">{pt.severity || 'Recorded'}</span></p>
+                      <p>Coordinates: {pt.lat.toFixed(4)}, {pt.lng.toFixed(4)}</p>
+                    </div>
+                  </Popup>
                 </CircleMarker>
               ))}
             </MapContainer>
           </div>
         </div>
       </div>
+
+      {/* Dataset Overview Summary Cards */}
+      {accidentStats && (
+        <div className="glass-card p-6 space-y-4">
+          <h3 className="text-lg font-semibold text-surface-200 flex items-center gap-2">
+            <HiLocationMarker className="text-primary-400" /> Karnataka Accident Dataset Insights
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="p-4 rounded-xl bg-surface-800/40 border border-surface-700">
+              <p className="text-xs text-surface-400">Total Recorded Incidents</p>
+              <p className="text-xl font-bold text-surface-100 mt-1">{accidentStats.total_records?.toLocaleString()}</p>
+            </div>
+            <div className="p-4 rounded-xl bg-surface-800/40 border border-surface-700">
+              <p className="text-xs text-surface-400">Mapped Geo-Coordinates</p>
+              <p className="text-xl font-bold text-green-400 mt-1">{accidentStats.records_with_coordinates?.toLocaleString()}</p>
+            </div>
+            <div className="p-4 rounded-xl bg-surface-800/40 border border-surface-700">
+              <p className="text-xs text-surface-400">Districts Covered</p>
+              <p className="text-xl font-bold text-cyan-400 mt-1">{accidentStats.districts_count}</p>
+            </div>
+            <div className="p-4 rounded-xl bg-surface-800/40 border border-surface-700">
+              <p className="text-xs text-surface-400">Fatal Incidents</p>
+              <p className="text-xl font-bold text-red-400 mt-1">
+                {(accidentStats.severity_breakdown['Fatal'] || 0).toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Model Info Cards */}
       <div className="grid md:grid-cols-2 gap-4">
@@ -192,10 +242,11 @@ export default function Analytics() {
             <div className="flex justify-between"><span className="text-surface-400">Algorithm</span><span className="text-surface-200">XGBoost + Random Forest</span></div>
             <div className="flex justify-between"><span className="text-surface-400">Accuracy</span><span className="text-green-400">85%</span></div>
             <div className="flex justify-between"><span className="text-surface-400">Features</span><span className="text-surface-200">Location, Time, Weather, Road</span></div>
-            <div className="flex justify-between"><span className="text-surface-400">Training Data</span><span className="text-surface-200">2,000 accident records</span></div>
+            <div className="flex justify-between"><span className="text-surface-400">Training Data</span><span className="text-surface-200">95,723 Karnataka accident records</span></div>
           </div>
         </div>
       </div>
+
     </div>
   );
 }

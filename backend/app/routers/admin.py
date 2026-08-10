@@ -96,23 +96,41 @@ async def upload_accident_data(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Upload a CSV file containing accident data."""
+    """Upload a CSV file containing accident data (supports Karnataka schema)."""
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
     content = await file.read()
-    decoded = content.decode("utf-8")
+    try:
+        decoded = content.decode("utf-8")
+    except UnicodeDecodeError:
+        decoded = content.decode("latin-1")
     reader = csv.DictReader(io.StringIO(decoded))
     count = 0
     for row in reader:
         try:
+            lat_val = row.get("Latitude") or row.get("latitude")
+            lng_val = row.get("Longitude") or row.get("longitude")
+            if not lat_val or not lng_val:
+                continue
+            lat = float(lat_val)
+            lng = float(lng_val)
+            if lat == 0.0 or lng == 0.0:
+                continue
+
             record = AccidentData(
-                latitude=float(row.get("latitude", 12.97)),
-                longitude=float(row.get("longitude", 77.59)),
-                severity=int(row.get("severity", 1)),
-                weather_condition=row.get("weather_condition"),
-                road_condition=row.get("road_condition"),
-                description=row.get("description"),
-                casualties=int(row.get("casualties", 0)) if row.get("casualties") else 0,
+                district=row.get("DISTRICTNAME") or row.get("district"),
+                police_station=row.get("UNITNAME") or row.get("police_station"),
+                crime_no=row.get("Crime_No") or row.get("crime_no"),
+                year=int(float(row.get("Year"))) if row.get("Year") else None,
+                vehicles_involved=int(float(row.get("Noofvehicle_involved"))) if row.get("Noofvehicle_involved") else None,
+                classification=row.get("Accident_Classification") or row.get("classification"),
+                main_cause=row.get("Main_Cause") or row.get("main_cause"),
+                severity=str(row.get("Severity") or row.get("severity")),
+                road_condition=row.get("Road_Condition") or row.get("road_condition"),
+                weather=row.get("Weather") or row.get("weather_condition"),
+                description=row.get("Accident_Description") or row.get("description"),
+                latitude=lat,
+                longitude=lng,
             )
             db.add(record)
             count += 1
@@ -120,6 +138,7 @@ async def upload_accident_data(
             continue
     db.commit()
     return {"message": f"Successfully uploaded {count} accident records", "filename": file.filename}
+
 
 @router.get("/predictions-monitor")
 async def monitor_predictions(admin=Depends(get_current_admin)):

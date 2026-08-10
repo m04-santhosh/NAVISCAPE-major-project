@@ -11,7 +11,8 @@ from .config import settings
 from .database import init_db, SessionLocal
 from .models.user import User
 from .middleware.auth import hash_password
-from .routers import auth, navigation, traffic, prediction, admin
+from .routers import auth, navigation, traffic, prediction, admin, accidents
+
 
 
 @asynccontextmanager
@@ -80,6 +81,7 @@ app.include_router(navigation.router)
 app.include_router(traffic.router)
 app.include_router(prediction.router)
 app.include_router(admin.router)
+app.include_router(accidents.router)
 
 
 @app.get("/", tags=["Root"])

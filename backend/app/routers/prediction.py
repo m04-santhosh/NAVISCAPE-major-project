@@ -56,31 +56,63 @@ async def predict_traffic(data: TrafficPredictionRequest, current_user=Depends(g
                        "confidence": round(random.uniform(0.78, 0.95), 2)})
     return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
 
+from sqlalchemy.orm import Session
+from ..database import get_db
+from ..models.accident import AccidentData
+
 @router.post("/risk", response_model=RiskPredictionResponse)
-async def predict_risk(data: RiskPredictionRequest, current_user=Depends(get_current_user)):
+async def predict_risk(
+    data: RiskPredictionRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     max_risk = 10.0
     for hs in ACCIDENT_HOTSPOTS:
         dist = math.sqrt((data.latitude - hs["lat"])**2 + (data.longitude - hs["lng"])**2)
         if dist < 0.02:
             max_risk = max(max_risk, hs["base_risk"] * (1 - dist / 0.02))
+
+    # Query DB accident density around location (within ~2km box)
+    db_accidents = (
+        db.query(AccidentData.severity)
+        .filter(
+            AccidentData.latitude.between(data.latitude - 0.02, data.latitude + 0.02),
+            AccidentData.longitude.between(data.longitude - 0.02, data.longitude + 0.02),
+        )
+        .limit(500)
+        .all()
+    )
+
+    db_risk_boost = 0.0
+    if db_accidents:
+        cnt = len(db_accidents)
+        fatals = sum(1 for a in db_accidents if a.severity == "Fatal")
+        db_risk_boost = min(60.0, cnt * 0.8 + fatals * 2.5)
+
+    max_risk = max(max_risk, 10.0 + db_risk_boost)
+
     hour = data.hour if data.hour is not None else datetime.now().hour
     if hour in [22,23,0,1,2,3,4,5]: max_risk *= 1.3
     elif hour in [8,9,17,18,19]: max_risk *= 1.15
     weather_mult = {"clear":1.0,"cloudy":1.05,"rain":1.4,"heavy_rain":1.7,"fog":1.5,"storm":1.8}
     max_risk *= weather_mult.get(data.weather, 1.0)
-    risk_score = min(100, max(0, max_risk + random.uniform(-5, 5)))
+    risk_score = min(100, max(0, max_risk + random.uniform(-3, 3)))
     if risk_score >= 75: rl = "critical"
     elif risk_score >= 50: rl = "high"
     elif risk_score >= 25: rl = "medium"
     else: rl = "low"
     factors = []
-    if risk_score > 50: factors.append("Proximity to accident-prone zone")
+    if db_accidents and len(db_accidents) >= 5:
+        factors.append(f"High historical accident area ({len(db_accidents)} recorded incidents nearby)")
+    elif risk_score > 50:
+        factors.append("Proximity to accident-prone zone")
     if hour in [22,23,0,1,2,3]: factors.append("Low visibility (nighttime)")
     if data.weather in ["rain","heavy_rain"]: factors.append("Wet road conditions")
     if hour in [8,9,17,18,19]: factors.append("High traffic density (rush hour)")
     if not factors: factors.append("Generally safe conditions")
     return RiskPredictionResponse(latitude=data.latitude, longitude=data.longitude,
         risk_score=round(risk_score, 1), risk_level=rl, factors=factors)
+
 
 @router.get("/congestion-forecast")
 async def get_congestion_forecast(current_user=Depends(get_current_user)):

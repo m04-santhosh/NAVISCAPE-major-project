@@ -12,10 +12,45 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.user import User
 from ..models.traffic import RouteHistory
-from ..schemas.traffic import RouteRequest, RouteHistoryResponse
+from ..schemas.traffic import (
+    RouteRequest,
+    RouteHistoryResponse,
+    RouteEvaluationRequest,
+    RouteEvaluationResponse,
+)
 from ..middleware.auth import get_current_user
+from ..services.route_safety import evaluate_route_safety
 
 router = APIRouter(prefix="/api", tags=["Navigation"])
+
+
+@router.post("/navigation/evaluate-route", response_model=RouteEvaluationResponse)
+async def evaluate_route(
+    data: RouteEvaluationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Evaluate empirical route safety using historical accident data along route waypoints.
+    Calculates 0-100 safety score, nearby accident count, fatal count, and hotspots.
+    """
+    if not data.waypoints:
+        return RouteEvaluationResponse(
+            route_type=data.route_type,
+            empirical_safety_score=90.0,
+            total_accidents_nearby=0,
+            fatal_accidents_nearby=0,
+            hotspots=[],
+        )
+
+    res = evaluate_route_safety(db, waypoints=data.waypoints)
+    return RouteEvaluationResponse(
+        route_type=data.route_type,
+        empirical_safety_score=res["empirical_safety_score"],
+        total_accidents_nearby=res["total_accidents_nearby"],
+        fatal_accidents_nearby=res["fatal_accidents_nearby"],
+        hotspots=res["hotspots"],
+    )
 
 
 @router.post("/navigate")
@@ -58,3 +93,4 @@ async def get_route_history(
         .all()
     )
     return [RouteHistoryResponse.model_validate(r) for r in routes]
+

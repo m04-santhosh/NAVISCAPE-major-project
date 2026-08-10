@@ -10,10 +10,13 @@ venv/
 *.db
 *.db-*
 
-# ML Models (large files)
+# ML Models & Datasets (large files)
 ml/models/*.h5
 ml/models/*.pkl
 ml/data/*.csv
+backend/data/**/*.csv
+backend/data/accidents/*.csv
+
 
 # Node
 node_modules/

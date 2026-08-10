@@ -70,6 +70,20 @@ function processOSRMRoutes(osrmRoutes) {
   });
 }
 
+/* ---- helper: distance in meters ---- */
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 /* ---- helper: bearing between two points ---- */
 function bearing(a, b) {
   const dLng = ((b[1] - a[1]) * Math.PI) / 180;
@@ -150,6 +164,9 @@ export default function Navigation() {
   const [navInstruction, setNavInstruction] = useState({ icon: HiArrowUp, text: 'Head straight' });
   const [travelledPath, setTravelledPath] = useState([]);
   const watchIdRef = useRef(null);
+  const warnedHotspotsRef = useRef(new Set());
+  const simIntervalRef = useRef(null);
+  const [activeHotspotWarning, setActiveHotspotWarning] = useState(null);
 
   /* ---------- GEOCODING (Nominatim) ---------- */
   const geocodeSearch = async (query, setSuggestions) => {
@@ -227,9 +244,32 @@ export default function Navigation() {
       // Get real road routes from OSRM
       const osrmRoutes = await fetchOSRMRoutes(sourceCoord[0], sourceCoord[1], destCoord[0], destCoord[1]);
       const processed = processOSRMRoutes(osrmRoutes);
-      setRoutes(processed);
+
+      // Evaluate empirical route safety via backend
+      const evaluated = await Promise.all(
+        processed.map(async (r) => {
+          try {
+            const evalRes = await api.post('/navigation/evaluate-route', {
+              route_type: r.route_type,
+              waypoints: r.waypoints,
+            });
+            return {
+              ...r,
+              safety_score: evalRes.data.empirical_safety_score ?? r.safety_score,
+              total_accidents_nearby: evalRes.data.total_accidents_nearby,
+              fatal_accidents_nearby: evalRes.data.fatal_accidents_nearby,
+              hotspots: evalRes.data.hotspots || [],
+            };
+          } catch (e) {
+            console.warn('Empirical safety evaluation fallback for route', r.route_type, e);
+            return r;
+          }
+        })
+      );
+
+      setRoutes(evaluated);
       // Default to balanced if available, otherwise first
-      setSelectedRoute(processed.find(r => r.route_type === 'balanced') || processed[0]);
+      setSelectedRoute(evaluated.find(r => r.route_type === 'balanced') || evaluated[0]);
 
       // Get risk analysis from backend
       try {
@@ -251,7 +291,7 @@ export default function Navigation() {
       // Fit map to all route points
       const allPts = processed.flatMap(r => r.waypoints);
       setBounds(L.latLngBounds(allPts));
-      toast.success('Routes found!');
+      toast.success('Routes calculated with safety analysis');
     } catch (err) {
       console.error('Route error:', err);
       toast.error('Could not find routes. Check your connection.');
@@ -300,73 +340,124 @@ export default function Navigation() {
     locateUser();
   }, [locateUser]);
 
-  /* ---------- LIVE NAVIGATION ---------- */
+  /* ---------- LIVE NAVIGATION & PROXIMITY ALERTS ---------- */
   const stopNavigation = () => {
     setIsNavigating(false);
     if (watchIdRef.current) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    if (simIntervalRef.current) {
+      clearInterval(simIntervalRef.current);
+      simIntervalRef.current = null;
+    }
+    setActiveHotspotWarning(null);
     toast('Navigation stopped', { icon: '🛑' });
   };
 
+  const processProximityAndLocationUpdate = useCallback((currentPos, heading = 0, speedKmh = 40, nearestIdx = 0) => {
+    setNavPosition(currentPos);
+    setTravelledPath(prev => [...prev, currentPos]);
+    setNavBearing(heading);
+    setNavSpeed(speedKmh);
+
+    if (selectedRoute?.waypoints?.length > 1) {
+      const totalWp = selectedRoute.waypoints.length;
+      const pct = (nearestIdx / (totalWp - 1)) * 100;
+      setNavProgress(pct);
+      setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
+      setNavETA(+(selectedRoute.duration_min * (1 - pct / 100)).toFixed(1));
+
+      if (nearestIdx < totalWp - 1) {
+        const dir = turnDirection(
+          selectedRoute.waypoints[Math.max(0, nearestIdx - 1)],
+          currentPos,
+          selectedRoute.waypoints[nearestIdx + 1]
+        );
+        setNavInstruction(dir);
+      }
+
+      if (pct > 95) setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
+    }
+
+    // 500m Hotspot Proximity Alert Detection
+    if (selectedRoute?.hotspots?.length) {
+      selectedRoute.hotspots.forEach((hs, idx) => {
+        const hsKey = `${hs.lat}_${hs.lng}_${idx}`;
+        if (!warnedHotspotsRef.current.has(hsKey)) {
+          const distM = haversineMeters(currentPos[0], currentPos[1], hs.lat, hs.lng);
+          if (distM <= 500) {
+            warnedHotspotsRef.current.add(hsKey);
+            const warningText = `⚠️ Approaching Accident Hotspot: ${hs.name} (${hs.fatal_count} fatal incidents)`;
+            toast.error(warningText, { duration: 6000, id: `hs-toast-${hsKey}` });
+            setActiveHotspotWarning({
+              name: hs.name,
+              fatal_count: hs.fatal_count,
+              accident_count: hs.accident_count,
+              risk_level: hs.risk_level,
+            });
+          }
+        }
+      });
+    }
+  }, [selectedRoute]);
+
   const startNavigation = () => {
     if (!selectedRoute) { toast.error('Select a route first'); return; }
-    if (!("geolocation" in navigator)) { toast.error('Geolocation not supported'); return; }
+
+    const initialPos = sourceCoord || (selectedRoute.waypoints && selectedRoute.waypoints[0]);
+    if (!initialPos) { toast.error('Route coordinates missing'); return; }
 
     setIsNavigating(true);
-    setTravelledPath([sourceCoord]);
-    setNavPosition(sourceCoord);
+    setTravelledPath([initialPos]);
+    setNavPosition(initialPos);
+    warnedHotspotsRef.current.clear();
+    setActiveHotspotWarning(null);
     saveRoute(selectedRoute);
     toast.success('Navigation started');
 
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const { latitude, longitude, heading, speed } = position.coords;
-        const currentPos = [latitude, longitude];
+    const waypoints = selectedRoute.waypoints || [];
+    if (waypoints.length > 1) {
+      let stepIdx = 0;
+      // Step interval to smoothly iterate through waypoints during simulation
+      const stepInterval = Math.max(1, Math.floor(waypoints.length / 30));
 
-        setNavPosition(currentPos);
-        setTravelledPath(prev => [...prev, currentPos]);
-        setNavBearing(heading || 0);
-        setNavSpeed(Math.round((speed || 0) * 3.6));
+      if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+      simIntervalRef.current = setInterval(() => {
+        stepIdx += stepInterval;
+        if (stepIdx >= waypoints.length - 1) {
+          stepIdx = waypoints.length - 1;
+          const currentPos = waypoints[stepIdx];
+          processProximityAndLocationUpdate(currentPos, 0, 0, stepIdx);
+          clearInterval(simIntervalRef.current);
+          simIntervalRef.current = null;
+          toast.success('You have arrived!');
+          return;
+        }
+        const prevPos = waypoints[Math.max(0, stepIdx - stepInterval)];
+        const currentPos = waypoints[stepIdx];
+        const brg = bearing(prevPos, currentPos);
+        processProximityAndLocationUpdate(currentPos, brg, 45, stepIdx);
+      }, 1000);
+    }
 
-        // Find progress along route
-        if (selectedRoute.waypoints.length > 1) {
-          let minD = Infinity;
+    if ("geolocation" in navigator) {
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, heading, speed } = position.coords;
+          const currentPos = [latitude, longitude];
           let nearestIdx = 0;
-          selectedRoute.waypoints.forEach((p, i) => {
+          let minD = Infinity;
+          waypoints.forEach((p, i) => {
             const d = Math.sqrt(Math.pow(p[0] - latitude, 2) + Math.pow(p[1] - longitude, 2));
             if (d < minD) { minD = d; nearestIdx = i; }
           });
-
-          const pct = (nearestIdx / (selectedRoute.waypoints.length - 1)) * 100;
-          setNavProgress(pct);
-          setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
-          setNavETA(+(selectedRoute.duration_min * (1 - pct / 100)).toFixed(1));
-
-          // Turn instructions
-          if (nearestIdx < selectedRoute.waypoints.length - 1) {
-            const dir = turnDirection(
-              selectedRoute.waypoints[Math.max(0, nearestIdx - 1)],
-              currentPos,
-              selectedRoute.waypoints[nearestIdx + 1]
-            );
-            setNavInstruction(dir);
-          }
-
-          if (pct > 95) {
-            setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
-          }
-
-          if (pct >= 100) {
-            stopNavigation();
-            toast.success('You have arrived!');
-          }
-        }
-      },
-      () => toast.error("Location tracking failed"),
-      { enableHighAccuracy: true, maximumAge: 1000 }
-    );
+          processProximityAndLocationUpdate(currentPos, heading || 0, Math.round((speed || 0) * 3.6), nearestIdx);
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 1000 }
+      );
+    }
   };
 
   const srcIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });
@@ -506,7 +597,24 @@ export default function Navigation() {
       {/* ===== NAVIGATION HUD (shown during live nav) ===== */}
       {isNavigating && (
         <div className="absolute top-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-96 z-[1000] flex flex-col gap-3 pointer-events-none">
-          <div className="pointer-events-auto">
+          <div className="pointer-events-auto flex flex-col gap-3">
+            {/* Active Hotspot Proximity Warning Banner */}
+            {activeHotspotWarning && (
+              <div className="glass-card p-4 border-l-4 border-red-500 bg-red-950/90 backdrop-blur-md shadow-2xl text-red-100 flex items-center justify-between animate-bounce">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">⚠️</span>
+                  <div>
+                    <div className="font-bold text-xs uppercase tracking-wider text-red-400">Approaching Accident Hotspot</div>
+                    <div className="font-semibold text-sm">{activeHotspotWarning.name}</div>
+                    <div className="text-xs text-red-300 font-medium">
+                      {activeHotspotWarning.fatal_count} fatal incident{activeHotspotWarning.fatal_count !== 1 ? 's' : ''} recorded nearby
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setActiveHotspotWarning(null)} className="text-red-400 hover:text-white p-1 font-bold">✕</button>
+              </div>
+            )}
+
             {/* Turn instruction card */}
             <div className="glass-card p-6 border-l-4 border-primary-400 shadow-2xl bg-surface-900/90 backdrop-blur-md">
               <div className="flex items-center gap-4">
@@ -626,6 +734,33 @@ export default function Navigation() {
             <CircleMarker key={i} center={[rz.lat, rz.lng]} radius={15}
               pathOptions={{ color: rz.level === 'critical' ? '#ef4444' : rz.level === 'high' ? '#f97316' : '#eab308', fillOpacity: 0.3 }}>
               <Popup>Risk: {rz.risk.toFixed(1)}/100 ({rz.level})</Popup>
+            </CircleMarker>
+          ))}
+
+          {/* Empirical Accident Hotspots for selected route */}
+          {selectedRoute?.hotspots?.map((hs, i) => (
+            <CircleMarker
+              key={`hs-${i}`}
+              center={[hs.lat, hs.lng]}
+              radius={hs.risk_level === 'critical' ? 14 : hs.risk_level === 'high' ? 10 : 8}
+              pathOptions={{
+                color: hs.risk_level === 'critical' ? '#dc2626' : hs.risk_level === 'high' ? '#ea580c' : '#ca8a04',
+                fillColor: hs.risk_level === 'critical' ? '#ef4444' : hs.risk_level === 'high' ? '#f97316' : '#eab308',
+                fillOpacity: 0.75,
+                weight: 2,
+              }}
+            >
+              <Popup>
+                <div className="p-1 text-slate-900 font-sans">
+                  <div className="font-bold text-xs text-red-600 flex items-center gap-1">
+                    ⚠️ ACCIDENT HOTSPOT ({hs.risk_level.toUpperCase()})
+                  </div>
+                  <div className="font-semibold text-sm mt-1">{hs.name}</div>
+                  <div className="text-xs text-slate-600 mt-1">
+                    Total Accidents: <b>{hs.accident_count}</b> | Fatalities: <b className="text-red-600">{hs.fatal_count}</b>
+                  </div>
+                </div>
+              </Popup>
             </CircleMarker>
           ))}
         </MapContainer>

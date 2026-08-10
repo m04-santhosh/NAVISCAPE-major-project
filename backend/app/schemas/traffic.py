@@ -62,3 +62,17 @@ class RouteHistoryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RouteEvaluationRequest(BaseModel):
+    route_type: str = "balanced"
+    waypoints: List[List[float]] = []
+
+
+class RouteEvaluationResponse(BaseModel):
+    route_type: str
+    empirical_safety_score: float
+    total_accidents_nearby: int
+    fatal_accidents_nearby: int
+    hotspots: List[dict] = []
+

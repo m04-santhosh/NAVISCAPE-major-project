@@ -43,4 +43,18 @@ def get_db():
 def init_db():
     """Create all tables. Called on application startup."""
     from .models import user, traffic, accident  # noqa: F401 — import to register models
+
+    # Schema migration: drop old skeleton accident_data if it lacks the 'district' column
+    # (safe — old table was never populated with real data)
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(accident_data)"))]
+            if cols and "district" not in cols:
+                conn.execute(text("DROP TABLE IF EXISTS accident_data"))
+                conn.commit()
+                print("[MIGRATE] Dropped legacy accident_data schema — rebuilding with Karnataka dataset schema.")
+    except Exception:
+        pass
+
     Base.metadata.create_all(bind=engine)
