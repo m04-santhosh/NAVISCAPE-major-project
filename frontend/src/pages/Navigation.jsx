@@ -131,6 +131,7 @@ export default function Navigation() {
   const [bounds, setBounds] = useState(null);
   const [showSourceDD, setShowSourceDD] = useState(false);
   const [showDestDD, setShowDestDD] = useState(false);
+  const [showTraffic, setShowTraffic] = useState(true);
 
   // Geocoding search results
   const [sourceSuggestions, setSourceSuggestions] = useState([]);
@@ -555,7 +556,18 @@ export default function Navigation() {
       {/* ===== MAP ===== */}
       <div className="flex-1 lg:glass-card overflow-hidden min-h-[300px] lg:relative absolute inset-0 w-full h-full lg:z-auto z-0">
         <MapContainer center={BANGALORE_CENTER} zoom={12} className="h-full w-full" style={{ borderRadius: '0.75rem' }}>
+          {/* Base map */}
           <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {/* TomTom real-time traffic overlay — proxied through backend so API key stays server-side */}
+          {showTraffic && (
+            <TileLayer
+              url="http://127.0.0.1:8000/api/traffic/tile/{z}/{x}/{y}"
+              tileSize={256}
+              opacity={0.75}
+              attribution='Traffic &copy; <a href="https://www.tomtom.com" target="_blank">TomTom</a>'
+              zIndex={10}
+            />
+          )}
           {!isNavigating && <FitBounds bounds={bounds} />}
           <FollowMarker position={navPosition} isNavigating={isNavigating} />
 
@@ -620,6 +632,18 @@ export default function Navigation() {
 
         {/* Map Overlay Buttons */}
         <div className={`absolute right-6 z-[1000] flex flex-col gap-2 transition-all duration-300 ${routes.length > 0 && !isNavigating ? 'bottom-56 lg:bottom-6' : 'bottom-6'}`}>
+          {/* Live Traffic toggle */}
+          <button
+            onClick={() => setShowTraffic(v => !v)}
+            title={showTraffic ? 'Hide Live Traffic' : 'Show Live Traffic'}
+            className={`px-3 py-2 rounded-xl border text-xs font-semibold shadow-lg transition-all duration-200 active:scale-95 flex items-center gap-1.5
+              ${showTraffic
+                ? 'bg-green-600/90 border-green-500 text-white hover:bg-green-500'
+                : 'bg-surface-800 border-surface-700 text-surface-400 hover:bg-surface-700'}`}
+          >
+            <span className={`w-2 h-2 rounded-full ${showTraffic ? 'bg-green-300 animate-pulse' : 'bg-surface-600'}`} />
+            Live Traffic
+          </button>
           {!isNavigating && (
             <button onClick={locateUser} title="Locate Me"
               className="p-3 rounded-full bg-surface-800 border border-surface-700 text-primary-400 hover:bg-surface-700 shadow-lg transition-colors active:scale-95">

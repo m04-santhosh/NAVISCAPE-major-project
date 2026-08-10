@@ -1,13 +1,15 @@
 """
 Traffic Router
 Provides current, historical, and heatmap traffic data.
+Also proxies real-time TomTom traffic flow tiles server-side.
 """
 
 import random
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import APIRouter, Depends, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -16,6 +18,55 @@ from ..middleware.auth import get_current_user
 from ..config import settings
 
 router = APIRouter(prefix="/api/traffic", tags=["Traffic"])
+
+# ---------------------------------------------------------------------------
+# TomTom real-time traffic tile proxy
+# ---------------------------------------------------------------------------
+TOMTOM_TILE_BASE = "https://api.tomtom.com/maps/orbis/traffic/flow/raster/tile"
+TOMTOM_TIMEOUT = 10.0  # seconds
+
+
+@router.get("/tile/{zoomLevel}/{x}/{y}", tags=["Traffic Tiles"])
+async def get_traffic_tile(
+    zoomLevel: int = Path(..., ge=0, le=22, description="Zoom level (0-22)"),
+    x: int = Path(..., ge=0, description="Tile X coordinate"),
+    y: int = Path(..., ge=0, description="Tile Y coordinate"),
+):
+    """
+    Proxy endpoint: fetches a real-time TomTom traffic flow raster tile
+    and returns the PNG bytes. The TomTom API key is kept server-side only.
+    """
+    api_key = settings.TOMTOM_API_KEY
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="TomTom API key is not configured on the server. "
+                   "Set TOMTOM_API_KEY in backend/.env",
+        )
+
+    url = f"{TOMTOM_TILE_BASE}/{zoomLevel}/{x}/{y}"
+    params = {"tileSize": 256, "apiVersion": 2}
+    headers = {
+        "TomTom-Api-Version": "2",
+        "TomTom-Api-Key": api_key,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=TOMTOM_TIMEOUT) as client:
+            resp = await client.get(url, params=params, headers=headers)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="TomTom tile request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"TomTom request error: {exc}")
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"TomTom upstream error {resp.status_code}: {resp.text[:200]}",
+        )
+
+    return Response(content=resp.content, media_type="image/png")
+
 
 # Bangalore junction coordinates
 JUNCTIONS = {

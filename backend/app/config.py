@@ -36,6 +36,9 @@ class Settings:
     ML_MODELS_DIR: str = os.getenv("ML_MODELS_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ml", "models"))
     ML_DATA_DIR: str = os.getenv("ML_DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ml", "data"))
     
+    # External APIs
+    TOMTOM_API_KEY: str = os.getenv("TOMTOM_API_KEY", "")
+
     # Map defaults (Bangalore, India)
     DEFAULT_LAT: float = 12.9716
     DEFAULT_LNG: float = 77.5946
