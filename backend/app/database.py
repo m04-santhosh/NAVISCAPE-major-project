@@ -95,7 +95,7 @@ def _migrate_accident_table():
 def init_db():
     """Create all tables and run additive migrations. Called on application startup."""
     # Register all models so Base.metadata knows about them
-    from .models import user, traffic, accident  # noqa: F401
+    from .models import user, traffic, accident, road_hazard  # noqa: F401
     from .models import otp  # noqa: F401
 
     # Run migrations BEFORE create_all so the table structure is correct

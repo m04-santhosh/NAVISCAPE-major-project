@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft, HiOutlineLocationMarker, HiPaperAirplane } from 'react-icons/hi';
+import { useAuth } from '../context/AuthContext';
 import 'leaflet/dist/leaflet.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -127,6 +128,67 @@ function FitBounds({ bounds }) {
   return null;
 }
 
+function MapClickHandler({ onMapClick, active }) {
+  useMapEvents({
+    click: (e) => {
+      if (active) {
+        onMapClick(e.latlng);
+      }
+    },
+  });
+  return null;
+}
+
+/* ---- get custom icon for hazard type and severity ---- */
+const getHazardIcon = (type, severity) => {
+  const colors = {
+    Low: '#10b981',      // Emerald Green
+    Medium: '#eab308',   // Yellow/Gold
+    High: '#f97316',     // Orange
+    Critical: '#ef4444', // Red
+  };
+  const color = colors[severity] || '#3b82f6';
+  const animatePulse = severity === 'Critical' ? 'animate-pulse' : '';
+  
+  let iconSvg = '';
+  if (type === 'Accident') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-1.1 0-2 .9-2 2v7h2" /><circle cx="7" cy="17" r="2" /><circle cx="15" cy="17" r="2" /></svg>`;
+  } else if (type === 'Pothole') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M8 12h8"/></svg>`;
+  } else if (type === 'Road construction') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 22h20M12 2v20M5 7.5L9.5 3M19 7.5L14.5 3"/></svg>`;
+  } else if (type === 'Road blocked') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`;
+  } else if (type === 'Waterlogging') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5a5 5 0 0 0-10 0v12a5 5 0 0 0 10 0V5z"/></svg>`;
+  } else if (type === 'Fallen tree') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M9 8l3-3 3 3M4 19h16"/></svg>`;
+  } else if (type === 'Heavy traffic') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="7" cy="17" r="1"/><circle cx="17" cy="17" r="1"/></svg>`;
+  } else if (type === 'Dangerous road') {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10.2 3.2 8.6 8.6a2 2 0 0 1 0 2.8l-8.6 8.6a2 2 0 0 1-2.8 0L3.2 14.6a2 2 0 0 1 0-2.8l5.4-5.4"/></svg>`;
+  } else {
+    iconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`;
+  }
+
+  return L.divIcon({
+    className: '',
+    html: `
+      <div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center;">
+        <!-- Pulsing glow -->
+        <div class="${animatePulse}" style="position:absolute;width:28px;height:28px;border-radius:50%;background:${color};opacity:0.25;transform:scale(1);"></div>
+        <!-- Circle marker -->
+        <div style="position:absolute;width:22px;height:22px;border-radius:50%;border:2px solid ${color};background:#0f172a;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5);display:flex;align-items:center;justify-content:center;color:${color}">
+          ${iconSvg}
+        </div>
+      </div>
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -16],
+  });
+};
+
 /* ---- navigation car icon (SVG arrow) ---- */
 const carIconHtml = (rot) => L.divIcon({
   className: '',
@@ -139,6 +201,16 @@ const carIconHtml = (rot) => L.divIcon({
 
 /* ================================================================ */
 export default function Navigation() {
+  const { user } = useAuth();
+  const [hazards, setHazards] = useState([]);
+  const [reportType, setReportType] = useState('Accident');
+  const [reportSeverity, setReportSeverity] = useState('Medium');
+  const [reportLat, setReportLat] = useState('');
+  const [reportLng, setReportLng] = useState('');
+  const [reportDesc, setReportDesc] = useState('');
+  const [submittingHazard, setSubmittingHazard] = useState(false);
+  const [isReporting, setIsReporting] = useState(false);
+
   const [source, setSource] = useState('');
   const [dest, setDest] = useState('');
   const [sourceCoord, setSourceCoord] = useState(null);
@@ -369,10 +441,58 @@ export default function Navigation() {
     );
   }, []);
 
+  const fetchHazards = useCallback(async () => {
+    try {
+      const res = await api.get('/hazards');
+      setHazards(res.data);
+    } catch (err) {
+      console.error('Failed to fetch road hazards:', err);
+    }
+  }, []);
+
+  const handleReportHazard = async (e) => {
+    e.preventDefault();
+    if (!reportLat || !reportLng) {
+      toast.error('Please select coordinates on the map or input them.');
+      return;
+    }
+    setSubmittingHazard(true);
+    try {
+      await api.post('/hazards', {
+        hazard_type: reportType,
+        severity: reportSeverity,
+        latitude: parseFloat(reportLat),
+        longitude: parseFloat(reportLng),
+        description: reportDesc || null
+      });
+      toast.success('Road hazard reported successfully!');
+      setReportDesc('');
+      setReportLat('');
+      setReportLng('');
+      setIsReporting(false);
+      fetchHazards();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to submit report');
+    } finally {
+      setSubmittingHazard(false);
+    }
+  };
+
+  const handleResolveHazard = async (hazardId) => {
+    try {
+      await api.put(`/hazards/${hazardId}/resolve`);
+      toast.success('Road hazard resolved/deactivated.');
+      fetchHazards();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to resolve hazard');
+    }
+  };
+
   /* ---------- INITIAL LOCALIZATION ---------- */
   useEffect(() => {
     locateUser();
-  }, [locateUser]);
+    fetchHazards();
+  }, [locateUser, fetchHazards]);
 
   /* ---------- LIVE NAVIGATION & PROXIMITY ALERTS ---------- */
   const stopNavigation = () => {
@@ -514,46 +634,150 @@ export default function Navigation() {
       </div>
     ) : (
       <>
-        <h2 className="text-lg font-semibold text-surface-200 mb-4 flex items-center gap-2">
-          <HiLocationMarker className="text-primary-400" /> Route Planner
-        </h2>
-        {/* Source */}
-        <div className="relative mb-3">
-          <label className="text-xs font-medium text-surface-400 mb-1 block">Source</label>
-          <input className="input-field text-sm" placeholder="Search any location..." value={source}
-            onChange={e => handleSourceChange(e.target.value)}
-            onFocus={() => { setShowSourceDD(true); if (source) geocodeSearch(source, setSourceSuggestions); }}
-            onBlur={() => setTimeout(() => setShowSourceDD(false), 200)} />
-          {showSourceDD && sourceSuggestions.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
-              {sourceSuggestions.map((l,i) => (
-                <button key={i} onMouseDown={() => selectSource(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex justify-center my-1">
-          <button onClick={swapLocations} className="p-2 rounded-lg hover:bg-surface-700 transition-colors text-surface-400 hover:text-primary-400">
-            <HiSwitchHorizontal className="w-5 h-5 rotate-90" />
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-surface-200 flex items-center gap-2">
+            <HiLocationMarker className="text-primary-400" /> {isReporting ? 'Report Hazard' : 'Route Planner'}
+          </h2>
+          <button
+            onClick={() => setIsReporting(prev => !prev)}
+            className={`text-xs px-2.5 py-1.5 rounded-lg border font-semibold transition-all duration-200 active:scale-95
+              ${isReporting
+                ? 'bg-amber-600/20 border-amber-500/50 text-amber-300'
+                : 'bg-surface-800 border-surface-700 text-surface-300 hover:bg-surface-700'}`}
+          >
+            ⚠️ {isReporting ? 'Show Planner' : 'Report Hazard'}
           </button>
         </div>
-        <div className="relative mb-4">
-          <label className="text-xs font-medium text-surface-400 mb-1 block">Destination</label>
-          <input className="input-field text-sm" placeholder="Search any location..." value={dest}
-            onChange={e => handleDestChange(e.target.value)}
-            onFocus={() => { setShowDestDD(true); if (dest) geocodeSearch(dest, setDestSuggestions); }}
-            onBlur={() => setTimeout(() => setShowDestDD(false), 200)} />
-          {showDestDD && destSuggestions.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
-              {destSuggestions.map((l,i) => (
-                <button key={i} onMouseDown={() => selectDest(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
-              ))}
+
+        {isReporting ? (
+          <form onSubmit={handleReportHazard} className="space-y-3 animate-fade-in">
+            <div>
+              <label className="text-xs font-medium text-surface-400 mb-1 block">Hazard Type</label>
+              <select
+                value={reportType}
+                onChange={e => setReportType(e.target.value)}
+                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+              >
+                <option value="Accident">Accident</option>
+                <option value="Pothole">Pothole</option>
+                <option value="Road construction">Road construction</option>
+                <option value="Road blocked">Road blocked</option>
+                <option value="Waterlogging">Waterlogging</option>
+                <option value="Fallen tree">Fallen tree</option>
+                <option value="Heavy traffic">Heavy traffic</option>
+                <option value="Dangerous road">Dangerous road</option>
+                <option value="Other">Other</option>
+              </select>
             </div>
-          )}
-        </div>
-        <button onClick={findRoutes} disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2">
-          {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><HiSearch className="w-5 h-5" /><span>Find Routes</span></>}
-        </button>
+
+            <div>
+              <label className="text-xs font-medium text-surface-400 mb-1 block">Severity</label>
+              <select
+                value={reportSeverity}
+                onChange={e => setReportSeverity(e.target.value)}
+                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+              >
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+                <option value="Critical">Critical</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-medium text-surface-400 mb-1 block">Latitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="e.g. 12.9716"
+                  value={reportLat}
+                  onChange={e => setReportLat(e.target.value)}
+                  className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-surface-400 mb-1 block">Longitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="e.g. 77.5946"
+                  value={reportLng}
+                  onChange={e => setReportLng(e.target.value)}
+                  className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="text-[10px] text-amber-400 font-medium px-1 leading-snug">
+              💡 Tip: Click anywhere on the map to automatically pin coordinates.
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-surface-400 mb-1 block">Description (Optional)</label>
+              <textarea
+                placeholder="Describe the hazard details..."
+                value={reportDesc}
+                onChange={e => setReportDesc(e.target.value)}
+                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 h-16 resize-none focus:ring-1 focus:ring-primary-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submittingHazard}
+              className="btn-primary w-full flex items-center justify-center gap-2 mt-2 bg-amber-600 hover:bg-amber-500 border-amber-500 hover:shadow-lg transition-all active:scale-95 duration-150"
+            >
+              {submittingHazard ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <span>Submit Report</span>
+              )}
+            </button>
+          </form>
+        ) : (
+          <>
+            {/* Source */}
+            <div className="relative mb-3">
+              <label className="text-xs font-medium text-surface-400 mb-1 block">Source</label>
+              <input className="input-field text-sm" placeholder="Search any location..." value={source}
+                onChange={e => handleSourceChange(e.target.value)}
+                onFocus={() => { setShowSourceDD(true); if (source) geocodeSearch(source, setSourceSuggestions); }}
+                onBlur={() => setTimeout(() => setShowSourceDD(false), 200)} />
+              {showSourceDD && sourceSuggestions.length > 0 && (
+                <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
+                  {sourceSuggestions.map((l,i) => (
+                    <button key={i} onMouseDown={() => selectSource(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-center my-1">
+              <button onClick={swapLocations} className="p-2 rounded-lg hover:bg-surface-700 transition-colors text-surface-400 hover:text-primary-400">
+                <HiSwitchHorizontal className="w-5 h-5 rotate-90" />
+              </button>
+            </div>
+            <div className="relative mb-4">
+              <label className="text-xs font-medium text-surface-400 mb-1 block">Destination</label>
+              <input className="input-field text-sm" placeholder="Search any location..." value={dest}
+                onChange={e => handleDestChange(e.target.value)}
+                onFocus={() => { setShowDestDD(true); if (dest) geocodeSearch(dest, setDestSuggestions); }}
+                onBlur={() => setTimeout(() => setShowDestDD(false), 200)} />
+              {showDestDD && destSuggestions.length > 0 && (
+                <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
+                  {destSuggestions.map((l,i) => (
+                    <button key={i} onMouseDown={() => selectDest(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={findRoutes} disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2">
+              {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><HiSearch className="w-5 h-5" /><span>Find Routes</span></>}
+            </button>
+          </>
+        )}
       </>
     )
   );
@@ -954,6 +1178,55 @@ export default function Navigation() {
                 </div>
               </Popup>
             </CircleMarker>
+          ))}
+          {/* Click handler to set report coords */}
+          <MapClickHandler onMapClick={(latlng) => {
+            if (isReporting) {
+              setReportLat(latlng.lat.toFixed(6));
+              setReportLng(latlng.lng.toFixed(6));
+              toast.success(`Coordinates set to: ${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`);
+            }
+          }} active={isReporting} />
+
+          {/* Live User Road Hazards (Phase 6) */}
+          {hazards.map((h) => (
+            <Marker
+              key={`hazard-${h.id}`}
+              position={[h.latitude, h.longitude]}
+              icon={getHazardIcon(h.hazard_type, h.severity)}
+            >
+              <Popup>
+                <div className="p-1 text-slate-900 font-sans min-w-[200px]">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                    <span className="font-bold text-sm text-red-600">⚠️ {h.hazard_type}</span>
+                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase
+                      ${h.severity === 'Critical' ? 'bg-red-100 text-red-700' :
+                        h.severity === 'High' ? 'bg-orange-100 text-orange-700' :
+                        h.severity === 'Medium' ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-green-100 text-green-700'}`}
+                    >
+                      {h.severity}
+                    </span>
+                  </div>
+                  {h.description && (
+                    <p className="text-xs mt-2 text-slate-700 leading-relaxed bg-slate-50 p-2 rounded border border-slate-100">
+                      {h.description}
+                    </p>
+                  )}
+                  <div className="text-[10px] text-slate-500 mt-2.5 flex items-center justify-between">
+                    <span>Reported: {new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  {user && h.user_id === user.id && (
+                    <button
+                      onClick={() => handleResolveHazard(h.id)}
+                      className="w-full mt-3 py-1.5 text-xs font-bold text-center text-white bg-green-600 hover:bg-green-500 rounded-lg transition-colors duration-150 shadow"
+                    >
+                      Resolve/Clear Hazard
+                    </button>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
           ))}
         </MapContainer>
 

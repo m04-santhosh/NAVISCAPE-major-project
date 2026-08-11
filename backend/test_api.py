@@ -6,11 +6,14 @@ route optimization (Phase 4), and traffic intelligence (Phase 5).
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.database import SessionLocal
+from app.database import SessionLocal, init_db
 from app.models.user import User
 from app.models.otp import OTPRecord, OTPPurpose
 from app.middleware.auth import hash_pin
 from datetime import datetime, timedelta, timezone
+
+# Ensure database tables and migrations are initialized
+init_db()
 
 client = TestClient(app)
 
@@ -373,6 +376,45 @@ def test_route_traffic_intelligence_endpoint():
     assert data["traffic_confidence"] >= 0.0
 
 
+def test_road_hazards_endpoint():
+    """Phase 6: Live Road Hazards reporting, fetching, and resolving."""
+    # 1. Create a hazard report
+    payload = {
+        "hazard_type": "Pothole",
+        "severity": "High",
+        "latitude": 12.9170,
+        "longitude": 77.6230,
+        "description": "Very large pothole near Silk Board."
+    }
+    response = client.post("/api/hazards", json=payload, headers=_auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["hazard_type"] == "Pothole"
+    assert data["severity"] == "High"
+    assert data["status"] == "Active"
+    assert "id" in data
+    hazard_id = data["id"]
+
+    # 2. Get nearby hazards (active only)
+    response = client.get("/api/hazards?latitude=12.9170&longitude=77.6230&radius_km=5.0", headers=_auth_headers)
+    assert response.status_code == 200
+    nearby = response.json()
+    assert len(nearby) > 0
+    assert any(h["id"] == hazard_id for h in nearby)
+
+    # 3. Resolve the hazard report
+    response = client.put(f"/api/hazards/{hazard_id}/resolve", headers=_auth_headers)
+    assert response.status_code == 200
+    resolved_data = response.json()
+    assert resolved_data["status"] == "Resolved"
+
+    # 4. Verify it is no longer returned in nearby active hazards
+    response = client.get("/api/hazards?latitude=12.9170&longitude=77.6230&radius_km=5.0", headers=_auth_headers)
+    assert response.status_code == 200
+    nearby_after = response.json()
+    assert not any(h["id"] == hazard_id for h in nearby_after)
+
+
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
@@ -392,6 +434,7 @@ if __name__ == "__main__":
         ("Navigate Save Endpoint", test_navigate_endpoint),
         ("Route Optimization Endpoint", test_route_optimization_endpoint),
         ("Route Traffic Intelligence Endpoint", test_route_traffic_intelligence_endpoint),
+        ("Road Hazards Endpoint", test_road_hazards_endpoint),
     ]
     print(f"Running NAVISCAPE Backend API Test Suite ({len(tests)} integration tests)...")
     for name, test_func in tests:

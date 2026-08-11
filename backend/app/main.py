@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import init_db
-from .routers import auth, navigation, traffic, prediction, accidents
+from .routers import auth, navigation, traffic, prediction, accidents, road_hazard
 
 
 @asynccontextmanager
@@ -55,6 +55,7 @@ app.include_router(navigation.router)
 app.include_router(traffic.router)
 app.include_router(prediction.router)
 app.include_router(accidents.router)
+app.include_router(road_hazard.router)
 
 
 @app.get("/", tags=["Root"])
