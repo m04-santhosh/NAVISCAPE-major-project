@@ -29,6 +29,11 @@ const PRESET_LOCATIONS = [
 const ROUTE_COLORS = { shortest: '#ef4444', safest: '#22c55e', balanced: '#06b6d4' };
 const ROUTE_LABELS = { shortest: 'Fastest Route', safest: 'Safest Route', balanced: 'Balanced Route' };
 
+// Phase 5: Traffic level → color
+const TRAFFIC_COLOR = { Low: 'text-green-400', Moderate: 'text-yellow-400', High: 'text-orange-400', Severe: 'text-red-400' };
+const TRAFFIC_BG = { Low: 'bg-green-500/15', Moderate: 'bg-yellow-500/15', High: 'bg-orange-500/15', Severe: 'bg-red-500/15' };
+const TRAFFIC_ICON = { Low: '🟢', Moderate: '🟡', High: '🟠', Severe: '🔴' };
+
 /* ---- OSRM API: fetch real road routes ---- */
 async function fetchOSRMRoutes(srcLat, srcLng, dstLat, dstLng) {
   const url = `https://router.project-osrm.org/route/v1/driving/${srcLng},${srcLat};${dstLng},${dstLat}?alternatives=true&overview=full&geometries=geojson&steps=true`;
@@ -140,6 +145,8 @@ export default function Navigation() {
   const [destCoord, setDestCoord] = useState(null);
   const [routes, setRoutes] = useState([]);
   const [selectedRoute, setSelectedRoute] = useState(null);
+  const [recommendedRouteId, setRecommendedRouteId] = useState(null);
+  const [recommendationReasons, setRecommendationReasons] = useState([]);
   const [riskZones, setRiskZones] = useState([]);
   const [loading, setLoading] = useState(false);
   const [bounds, setBounds] = useState(null);
@@ -236,40 +243,68 @@ export default function Navigation() {
   const selectDest = (loc) => { setDest(loc.name); setDestCoord([loc.lat, loc.lng]); setShowDestDD(false); setDestSuggestions([]); };
   const swapLocations = () => { setSource(dest); setDest(source); setSourceCoord(destCoord); setDestCoord(sourceCoord); };
 
-  /* ---------- FIND ROUTES via OSRM ---------- */
+  /* ---------- FIND & OPTIMIZE ROUTES via OSRM & SMART ROUTE ENGINE ---------- */
   const findRoutes = async () => {
     if (!sourceCoord || !destCoord) { toast.error('Select both locations'); return; }
     setLoading(true);
     try {
-      // Get real road routes from OSRM
+      // 1. Get real road routes from OSRM
       const osrmRoutes = await fetchOSRMRoutes(sourceCoord[0], sourceCoord[1], destCoord[0], destCoord[1]);
       const processed = processOSRMRoutes(osrmRoutes);
 
-      // Evaluate empirical route safety via backend
-      const evaluated = await Promise.all(
-        processed.map(async (r) => {
-          try {
-            const evalRes = await api.post('/navigation/evaluate-route', {
-              route_type: r.route_type,
-              waypoints: r.waypoints,
-            });
-            return {
-              ...r,
-              safety_score: evalRes.data.empirical_safety_score ?? r.safety_score,
-              total_accidents_nearby: evalRes.data.total_accidents_nearby,
-              fatal_accidents_nearby: evalRes.data.fatal_accidents_nearby,
-              hotspots: evalRes.data.hotspots || [],
-            };
-          } catch (e) {
-            console.warn('Empirical safety evaluation fallback for route', r.route_type, e);
-            return r;
-          }
-        })
-      );
+      // 2. Send candidate routes to Phase 4 Smart Route Decision Engine API
+      const candidatePayload = processed.map((r, i) => ({
+        route_id: r.route_type || `route_${i}`,
+        route_type: r.route_type || 'balanced',
+        distance_km: r.distance_km,
+        duration_min: r.duration_min,
+        waypoints: r.waypoints,
+      }));
 
-      setRoutes(evaluated);
-      // Default to balanced if available, otherwise first
-      setSelectedRoute(evaluated.find(r => r.route_type === 'balanced') || evaluated[0]);
+      try {
+        const optRes = await api.post('/navigation/optimize-routes', { routes: candidatePayload });
+        const { routes: evalRoutes, recommended_route_id, recommendation_reasons } = optRes.data;
+
+        const merged = evalRoutes.map(r => ({
+          ...r,
+          label: ROUTE_LABELS[r.route_type] || r.route_type,
+          waypoints: (r.waypoints && r.waypoints.length > 0)
+            ? r.waypoints
+            : (processed.find(p => p.route_type === r.route_type)?.waypoints || []),
+        }));
+
+        setRoutes(merged);
+        setRecommendedRouteId(recommended_route_id);
+        setRecommendationReasons(recommendation_reasons || []);
+
+        const recRoute = merged.find(r => r.route_id === recommended_route_id) || merged[0];
+        setSelectedRoute(recRoute);
+      } catch (optErr) {
+        console.warn('Smart route optimization API fallback:', optErr);
+        // Fallback to Phase 3 empirical safety evaluation
+        const evaluated = await Promise.all(
+          processed.map(async (r) => {
+            try {
+              const evalRes = await api.post('/navigation/evaluate-route', {
+                route_type: r.route_type,
+                waypoints: r.waypoints,
+              });
+              return {
+                ...r,
+                safety_score: evalRes.data.empirical_safety_score ?? r.safety_score,
+                total_accidents_nearby: evalRes.data.total_accidents_nearby,
+                fatal_accidents_nearby: evalRes.data.fatal_accidents_nearby,
+                hotspots: evalRes.data.hotspots || [],
+              };
+            } catch (e) {
+              return r;
+            }
+          })
+        );
+
+        setRoutes(evaluated);
+        setSelectedRoute(evaluated[0]);
+      }
 
       // Get risk analysis from backend
       try {
@@ -284,14 +319,13 @@ export default function Navigation() {
           level: riskRes.data.risk_level,
         }]);
       } catch {
-        // Risk prediction is optional — don't block routing
         setRiskZones([]);
       }
 
       // Fit map to all route points
       const allPts = processed.flatMap(r => r.waypoints);
       setBounds(L.latLngBounds(allPts));
-      toast.success('Routes calculated with safety analysis');
+      toast.success('Smart route optimization complete');
     } catch (err) {
       console.error('Route error:', err);
       toast.error('Could not find routes. Check your connection.');
@@ -524,40 +558,198 @@ export default function Navigation() {
     )
   );
 
-  // Helper: Route Alternatives Content
-  const renderAlternativesContent = () => (
-    <>
-      <h3 className="text-sm font-semibold text-surface-300 hidden lg:block mb-3">
-        {routes.length === 1 ? '1 Route Found' : `${routes.length} Routes Found`}
-      </h3>
-      {/* Scroll container on mobile, block layout on desktop */}
-      <div className="flex lg:flex-col flex-row gap-3 overflow-x-auto pb-1 max-w-full no-scrollbar">
-        {routes.map((r, i) => (
-          <button key={i} onClick={() => setSelectedRoute(r)}
-            className={`text-left p-3.5 rounded-xl border transition-colors duration-200 flex-shrink-0 lg:w-full w-[240px] ${selectedRoute?.route_type === r.route_type
-              ? 'border-primary-500 bg-primary-500/15' : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'}`}>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="font-medium text-surface-200 text-sm truncate">{r.label}</span>
-              <span className="w-2.5 h-2.5 rounded-full" style={{ background: ROUTE_COLORS[r.route_type] }} />
+  // Helper: Recommended Route & Alternatives Content
+  const renderAlternativesContent = () => {
+    const recommendedRoute = routes.find(r => r.route_id === recommendedRouteId) || routes[0];
+    const displayReasons = (recommendationReasons && recommendationReasons.length > 0)
+      ? recommendationReasons
+      : (recommendedRoute?.reasons || []);
+
+    return (
+      <>
+        {/* Recommended Route Hero Card */}
+        {recommendedRoute && (
+          <div className="p-4 rounded-xl bg-gradient-to-br from-cyan-950/90 via-surface-900 to-surface-900 border border-cyan-500/50 shadow-xl mb-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-cyan-400">
+                <HiShieldCheck className="w-4 h-4 text-cyan-400" />
+                NAVISCAPE RECOMMENDED
+              </span>
+              <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                Overall {recommendedRoute.overall_score || 85}/100
+              </span>
             </div>
-            <div className="grid grid-cols-3 gap-1 text-[11px]">
-              <div className="flex items-center gap-1 text-surface-400"><HiLocationMarker className="w-3 h-3 flex-shrink-0" />{r.distance_km} km</div>
-              <div className="flex items-center gap-1 text-surface-400"><HiClock className="w-3 h-3 flex-shrink-0" />{r.duration_min?.toFixed(0)} min</div>
-              <div className="flex items-center gap-1">
-                <HiShieldCheck className="w-3 h-3 flex-shrink-0" />
-                <span className={r.safety_score >= 80 ? 'text-green-400' : r.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400'}>{r.safety_score}</span>
+
+            <div className="flex items-baseline justify-between border-b border-surface-800 pb-2">
+              <div>
+                <span className="text-2xl font-bold text-surface-100">{recommendedRoute.duration_min?.toFixed(0)} min</span>
+                <span className="text-xs text-surface-400 ml-2">({recommendedRoute.distance_km} km)</span>
+              </div>
+              <span className="text-xs font-semibold text-surface-300">{recommendedRoute.label}</span>
+            </div>
+
+            {/* Stats grid: Safety · Current Traffic · Predicted Congestion · Accident Risk */}
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
+                <div className="text-[10px] text-surface-400 uppercase">Safety Score</div>
+                <div className={`font-bold mt-0.5 ${recommendedRoute.safety_score >= 80 ? 'text-green-400' : recommendedRoute.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {recommendedRoute.safety_score}
+                </div>
+              </div>
+              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
+                <div className="text-[10px] text-surface-400 uppercase">Traffic Now</div>
+                <div className={`font-bold mt-0.5 ${TRAFFIC_COLOR[recommendedRoute.traffic_level] || 'text-cyan-300'}`}>
+                  {TRAFFIC_ICON[recommendedRoute.traffic_level] || '🟡'} {recommendedRoute.traffic_level || 'Moderate'}
+                </div>
+              </div>
+              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
+                <div className="text-[10px] text-surface-400 uppercase">Predicted</div>
+                <div className={`font-bold mt-0.5 ${recommendedRoute.prediction_available ? (TRAFFIC_COLOR[recommendedRoute.predicted_congestion] || 'text-surface-300') : 'text-surface-500'}`}>
+                  {recommendedRoute.prediction_available
+                    ? <>{TRAFFIC_ICON[recommendedRoute.predicted_congestion] || '🟡'} {recommendedRoute.predicted_congestion}</>
+                    : '— N/A'}
+                </div>
+              </div>
+              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
+                <div className="text-[10px] text-surface-400 uppercase">Accident Risk</div>
+                <div className="font-bold text-emerald-400 mt-0.5">
+                  {recommendedRoute.risk_level || 'Low'}
+                </div>
               </div>
             </div>
-          </button>
-        ))}
-      </div>
-      {/* START NAVIGATION BUTTON */}
-      <button onClick={startNavigation}
-        className="w-full mt-2 py-3.5 rounded-xl font-bold text-white text-base bg-green-600 hover:bg-green-500 shadow-md transition-colors duration-200 flex items-center justify-center gap-2">
-        <HiPlay className="w-5 h-5" /> Start Navigation
-      </button>
-    </>
-  );
+
+            {/* Phase 5: Expected Delay & Traffic Source */}
+            {(recommendedRoute.expected_delay_minutes !== null && recommendedRoute.expected_delay_minutes !== undefined) && (
+              <div className="flex items-center justify-between text-xs mt-0.5 px-1">
+                <span className="text-surface-400">Expected delay</span>
+                <span className={`font-semibold ${recommendedRoute.expected_delay_minutes > 5 ? 'text-red-400' : recommendedRoute.expected_delay_minutes > 2 ? 'text-amber-400' : 'text-green-400'}`}>
+                  {recommendedRoute.expected_delay_minutes <= 1 ? '< 1 min' : `+${recommendedRoute.expected_delay_minutes?.toFixed(0)} min`}
+                </span>
+              </div>
+            )}
+            {recommendedRoute.traffic_source && (
+              <div className="text-[9px] text-surface-600 text-right leading-none">
+                Traffic data: {recommendedRoute.traffic_source}
+              </div>
+            )}
+
+            {/* WHY THIS ROUTE? */}
+            {displayReasons.length > 0 && (
+              <div className="pt-1.5 border-t border-surface-800/80">
+                <div className="text-[11px] font-bold text-surface-300 tracking-wider mb-1.5 uppercase">
+                  WHY THIS ROUTE?
+                </div>
+                <div className="space-y-1">
+                  {displayReasons.map((reason, idx) => (
+                    <div
+                      key={idx}
+                      className={`text-xs flex items-start gap-1.5 ${
+                        reason.startsWith('⚠') ? 'text-amber-300 font-medium' : 'text-surface-200'
+                      }`}
+                    >
+                      <span className="leading-snug">{reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <h3 className="text-xs font-bold uppercase tracking-wider text-surface-400 hidden lg:block mb-2">
+          Route Options ({routes.length})
+        </h3>
+
+        {/* Scroll container on mobile, block layout on desktop */}
+        <div className="flex lg:flex-col flex-row gap-2.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
+          {routes.map((r, i) => {
+            const isSelected = selectedRoute?.route_id
+              ? selectedRoute.route_id === r.route_id
+              : selectedRoute?.route_type === r.route_type;
+            const isRec = r.route_id === recommendedRouteId;
+
+            return (
+              <button
+                key={i}
+                onClick={() => setSelectedRoute(r)}
+                className={`text-left p-3 rounded-xl border transition-all duration-200 flex-shrink-0 lg:w-full w-[240px] relative ${
+                  isSelected
+                    ? 'border-cyan-500 bg-cyan-950/40 ring-1 ring-cyan-500/50 shadow-md'
+                    : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="font-semibold text-surface-100 text-sm truncate">{r.label}</span>
+                    {isRec && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex-shrink-0">
+                        RECOMMENDED
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ background: ROUTE_COLORS[r.route_type] || '#06b6d4' }}
+                  />
+                </div>
+
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-base font-bold text-surface-100">{r.duration_min?.toFixed(0)} min</span>
+                    <span className="text-xs text-surface-400">{r.distance_km} km</span>
+                  </div>
+                  {r.overall_score !== undefined && (
+                    <span className="text-xs font-extrabold text-cyan-400">
+                      Overall: {r.overall_score}/100
+                    </span>
+                  )}
+                </div>
+
+                {/* Phase 5: route card stats grid — Current traffic + Predicted */}
+                <div className="space-y-1.5 mt-1">
+                  <div className="grid grid-cols-3 gap-1 text-[10px] text-surface-400 border-t border-surface-700/40 pt-1.5">
+                    <div>Safety: <span className="font-medium text-surface-200">{r.safety_score}</span></div>
+                    <div className={TRAFFIC_COLOR[r.traffic_level] || 'text-cyan-300'}>
+                      {TRAFFIC_ICON[r.traffic_level] || '🟡'} {r.traffic_level || 'Mod'}
+                    </div>
+                    <div>Risk: <span className="font-medium text-surface-200">{r.risk_level || 'Low'}</span></div>
+                  </div>
+
+                  {/* Phase 5: Predicted congestion row */}
+                  {r.prediction_available && r.predicted_congestion && (
+                    <div className={`flex items-center justify-between text-[10px] rounded px-1.5 py-0.5 ${TRAFFIC_BG[r.predicted_congestion] || ''}`}>
+                      <span className="text-surface-400">Predicted ({r.prediction_horizon_minutes}min)</span>
+                      <span className={`font-semibold ${TRAFFIC_COLOR[r.predicted_congestion] || 'text-surface-200'}`}>
+                        {TRAFFIC_ICON[r.predicted_congestion]} {r.predicted_congestion}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Phase 5: Expected delay */}
+                  {r.expected_delay_minutes !== null && r.expected_delay_minutes !== undefined && (
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-surface-500">Delay</span>
+                      <span className={`font-semibold ${r.expected_delay_minutes > 5 ? 'text-red-400' : r.expected_delay_minutes > 2 ? 'text-amber-400' : 'text-green-400'}`}>
+                        {r.expected_delay_minutes <= 1 ? '~0 min' : `+${r.expected_delay_minutes?.toFixed(0)} min`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* START NAVIGATION BUTTON */}
+        <button
+          onClick={startNavigation}
+          className="w-full mt-3 py-3 rounded-xl font-bold text-white text-base bg-green-600 hover:bg-green-500 shadow-md transition-colors duration-200 flex items-center justify-center gap-2"
+        >
+          <HiPlay className="w-5 h-5" /> Start Navigation
+        </button>
+      </>
+    );
+  };
 
   return (
     <div className="h-[calc(100vh-2rem)] flex flex-col lg:flex-row gap-4 animate-fade-in relative overflow-hidden">
@@ -685,7 +877,7 @@ export default function Navigation() {
 
           {/* Dimmed alternative routes (Clickable Google Maps style) */}
           {!isNavigating && routes.map((r, i) => (
-            r.route_type !== selectedRoute?.route_type && (
+            ((selectedRoute?.route_id && r.route_id) ? r.route_id !== selectedRoute.route_id : r.route_type !== selectedRoute?.route_type) && (
               <g key={i}>
                 {/* Thick invisible overlay to make clicking easier */}
                 <Polyline

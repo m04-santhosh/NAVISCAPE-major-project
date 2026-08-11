@@ -2,6 +2,7 @@
 Traffic Router
 Provides current, historical, and heatmap traffic data.
 Also proxies real-time TomTom traffic flow tiles server-side.
+Phase 5: Adds POST /api/traffic/evaluate-route for route-specific traffic intelligence.
 """
 
 import random
@@ -16,6 +17,8 @@ from ..database import get_db
 from ..models.traffic import TrafficData
 from ..middleware.auth import get_current_user
 from ..config import settings
+from ..schemas.traffic import RouteTrafficRequest, RouteTrafficResponse
+from ..services.traffic_intelligence import evaluate_route_traffic_intelligence
 
 router = APIRouter(prefix="/api/traffic", tags=["Traffic"])
 
@@ -200,3 +203,34 @@ async def get_junctions(current_user=Depends(get_current_user)):
         {"id": jid, **info}
         for jid, info in JUNCTIONS.items()
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5: Route-specific Traffic Intelligence
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/evaluate-route", response_model=RouteTrafficResponse, tags=["Traffic Intelligence"])
+async def evaluate_route_traffic(
+    body: RouteTrafficRequest,
+    current_user=Depends(get_current_user),
+):
+    """
+    Phase 5 — Route Traffic Intelligence.
+    Evaluates real-time and predicted traffic conditions for a given set of route waypoints.
+
+    Uses:
+    - TomTom Traffic Flow Segment API (real-time speed vs free-flow speed per coordinate)
+    - LSTM model for junction 1 (Silk Board) when model file is present on disk
+    - Hour-pattern prediction model for all other monitored junctions on the route
+
+    Falls back to junction-proximity scoring when TomTom is unavailable.
+    Navigation never crashes — all errors produce a safe neutral response.
+    """
+    result = await evaluate_route_traffic_intelligence(
+        waypoints=body.waypoints,
+        distance_km=body.distance_km,
+        duration_min=body.duration_min,
+        tomtom_api_key=settings.TOMTOM_API_KEY,
+        prediction_horizon_minutes=body.prediction_horizon_minutes,
+    )
+    return RouteTrafficResponse(**result)

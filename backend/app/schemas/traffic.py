@@ -76,3 +76,72 @@ class RouteEvaluationResponse(BaseModel):
     fatal_accidents_nearby: int
     hotspots: List[dict] = []
 
+
+class CandidateRouteInput(BaseModel):
+    route_id: Optional[str] = None
+    route_type: Optional[str] = "balanced"
+    distance_km: float = 0.0
+    duration_min: float = 0.0
+    waypoints: List[List[float]] = []
+
+
+class OptimizeRoutesRequest(BaseModel):
+    routes: List[CandidateRouteInput] = []
+
+
+class EvaluatedRouteOutput(BaseModel):
+    route_id: str
+    route_type: str
+    distance_km: float
+    duration_min: float
+    eta_minutes: float
+    safety_score: float
+    accident_risk_score: float
+    # Phase 4 traffic
+    traffic_score: float
+    predicted_traffic_score: Optional[float] = None
+    eta_score: float
+    distance_score: float
+    overall_score: float
+    risk_level: str
+    traffic_level: str
+    total_accidents_nearby: int
+    fatal_accidents_nearby: int
+    hotspots: List[dict] = []
+    waypoints: List[List[float]] = []
+    reasons: List[str] = []
+    # Phase 5 traffic intelligence fields
+    current_traffic_score: Optional[float] = None
+    predicted_congestion: Optional[str] = None
+    expected_delay_minutes: Optional[float] = None
+    traffic_source: Optional[str] = None
+    traffic_confidence: Optional[float] = None
+    prediction_available: bool = False
+    prediction_horizon_minutes: int = 30
+
+
+class OptimizeRoutesResponse(BaseModel):
+    routes: List[EvaluatedRouteOutput]
+    recommended_route_id: str
+    recommendation_reasons: List[str]
+
+
+# Phase 5: Dedicated route traffic evaluation endpoint schemas
+class RouteTrafficRequest(BaseModel):
+    waypoints: List[List[float]] = []
+    distance_km: float = 0.0
+    duration_min: float = 0.0
+    prediction_horizon_minutes: int = 30
+
+
+class RouteTrafficResponse(BaseModel):
+    traffic_score: float
+    current_traffic_score: float
+    predicted_traffic_score: Optional[float] = None
+    traffic_level: str
+    predicted_congestion: Optional[str] = None
+    expected_delay_minutes: Optional[float] = None
+    traffic_source: str
+    traffic_confidence: float
+    prediction_available: bool
+    prediction_horizon_minutes: int

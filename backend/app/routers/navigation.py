@@ -17,11 +17,31 @@ from ..schemas.traffic import (
     RouteHistoryResponse,
     RouteEvaluationRequest,
     RouteEvaluationResponse,
+    OptimizeRoutesRequest,
+    OptimizeRoutesResponse,
 )
 from ..middleware.auth import get_current_user
 from ..services.route_safety import evaluate_route_safety
+from ..services.route_optimizer import optimize_candidate_routes
 
 router = APIRouter(prefix="/api", tags=["Navigation"])
+
+
+@router.post("/navigation/optimize-routes", response_model=OptimizeRoutesResponse)
+async def optimize_routes(
+    data: OptimizeRoutesRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 4: Smart Route Decision Engine.
+    Evaluates candidate routes using safety, accident risk, real-time traffic, relative ETA, and distance.
+    Calculates unified 0-100 overall score and selects recommended route with dynamic reasons.
+    """
+    raw_routes = [r.model_dump() for r in data.routes]
+    res = optimize_candidate_routes(db, raw_routes)
+    return OptimizeRoutesResponse(**res)
+
 
 
 @router.post("/navigation/evaluate-route", response_model=RouteEvaluationResponse)
