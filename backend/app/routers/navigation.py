@@ -70,6 +70,8 @@ async def evaluate_route(
         total_accidents_nearby=res["total_accidents_nearby"],
         fatal_accidents_nearby=res["fatal_accidents_nearby"],
         hotspots=res["hotspots"],
+        active_hazards_nearby=res.get("active_hazards_nearby", 0),
+        live_hazards=res.get("live_hazards", []),
     )
 
 

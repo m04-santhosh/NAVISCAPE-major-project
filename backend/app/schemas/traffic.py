@@ -75,6 +75,8 @@ class RouteEvaluationResponse(BaseModel):
     total_accidents_nearby: int
     fatal_accidents_nearby: int
     hotspots: List[dict] = []
+    active_hazards_nearby: Optional[int] = 0
+    live_hazards: Optional[List[dict]] = []
 
 
 class CandidateRouteInput(BaseModel):
@@ -110,6 +112,8 @@ class EvaluatedRouteOutput(BaseModel):
     hotspots: List[dict] = []
     waypoints: List[List[float]] = []
     reasons: List[str] = []
+    active_hazards_nearby: Optional[int] = 0
+    live_hazards: Optional[List[dict]] = []
     # Phase 5 traffic intelligence fields
     current_traffic_score: Optional[float] = None
     predicted_congestion: Optional[str] = None

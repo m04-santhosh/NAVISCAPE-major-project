@@ -244,6 +244,7 @@ export default function Navigation() {
   const [travelledPath, setTravelledPath] = useState([]);
   const watchIdRef = useRef(null);
   const warnedHotspotsRef = useRef(new Set());
+  const warnedHazardsRef = useRef(new Set());
   const simIntervalRef = useRef(null);
   const [activeHotspotWarning, setActiveHotspotWarning] = useState(null);
 
@@ -554,6 +555,21 @@ export default function Navigation() {
         }
       });
     }
+
+    // 500m User-reported Hazard Proximity Alert Detection
+    if (selectedRoute?.live_hazards?.length) {
+      selectedRoute.live_hazards.forEach((hz) => {
+        const hzKey = `${hz.id}`;
+        if (!warnedHazardsRef.current.has(hzKey)) {
+          const distM = haversineMeters(currentPos[0], currentPos[1], hz.latitude, hz.longitude);
+          if (distM <= 500) {
+            warnedHazardsRef.current.add(hzKey);
+            const warningText = `⚠️ Alert: Approaching User-Reported Hazard Ahead! Type: ${hz.hazard_type} (${hz.severity} severity)${hz.description ? ` - ${hz.description}` : ''}`;
+            toast.error(warningText, { duration: 7000, id: `hz-toast-${hzKey}` });
+          }
+        }
+      });
+    }
   }, [selectedRoute]);
 
   const startNavigation = () => {
@@ -566,6 +582,7 @@ export default function Navigation() {
     setTravelledPath([initialPos]);
     setNavPosition(initialPos);
     warnedHotspotsRef.current.clear();
+    warnedHazardsRef.current.clear();
     setActiveHotspotWarning(null);
     saveRoute(selectedRoute);
     toast.success('Navigation started');
@@ -956,6 +973,14 @@ export default function Navigation() {
                       <span className={`font-semibold ${r.expected_delay_minutes > 5 ? 'text-red-400' : r.expected_delay_minutes > 2 ? 'text-amber-400' : 'text-green-400'}`}>
                         {r.expected_delay_minutes <= 1 ? '~0 min' : `+${r.expected_delay_minutes?.toFixed(0)} min`}
                       </span>
+                    </div>
+                  )}
+
+                  {/* Phase 7: Active Hazards on Route */}
+                  {r.active_hazards_nearby > 0 && (
+                    <div className="flex items-center justify-between text-[10px] bg-red-950/40 border border-red-500/20 rounded px-1.5 py-0.5 mt-1 text-red-300 font-semibold">
+                      <span>⚠️ Active Hazards</span>
+                      <span className="font-extrabold">{r.active_hazards_nearby}</span>
                     </div>
                   )}
                 </div>

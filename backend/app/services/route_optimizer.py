@@ -127,7 +127,17 @@ def optimize_candidate_routes(
         prediction_available = ti["prediction_available"]
         prediction_horizon_minutes = ti["prediction_horizon_minutes"]
 
-        durations.append(duration_min if duration_min > 0 else 1.0)
+        # Extract active hazards and delays
+        active_hazards_count = int(safety_res.get("active_hazards_nearby", 0))
+        live_hazards_list = safety_res.get("live_hazards", [])
+        hazard_delay = float(safety_res.get("live_hazard_delay_minutes", 0.0))
+
+        # Update expected delay and ETA to include both traffic and live hazard delays
+        traffic_delay = expected_delay_minutes or 0.0
+        total_delay = round(traffic_delay + hazard_delay, 1)
+        eta_minutes = round(duration_min + total_delay, 1)
+
+        durations.append(eta_minutes if eta_minutes > 0 else 1.0)
         distances.append(distance_km if distance_km > 0 else 1.0)
 
         evaluated_list.append({
@@ -135,20 +145,22 @@ def optimize_candidate_routes(
             "route_type": route_type,
             "distance_km": distance_km,
             "duration_min": duration_min,
-            "eta_minutes": duration_min,
+            "eta_minutes": eta_minutes,
             "waypoints": waypoints,
             "safety_score": safety_score,
             "accident_risk_score": accident_risk_score,
             "total_accidents_nearby": total_accidents,
             "fatal_accidents_nearby": fatal_accidents,
             "hotspots": hotspots,
+            "active_hazards_nearby": active_hazards_count,
+            "live_hazards": live_hazards_list,
             # Phase 5 traffic intelligence fields
             "traffic_score": traffic_score,
             "current_traffic_score": current_traffic_score,
             "predicted_traffic_score": predicted_traffic_score,
             "traffic_level": traffic_level,
             "predicted_congestion": predicted_congestion,
-            "expected_delay_minutes": expected_delay_minutes,
+            "expected_delay_minutes": total_delay,  # Return combined delays
             "traffic_source": traffic_source,
             "traffic_confidence": traffic_confidence,
             "prediction_available": prediction_available,
@@ -229,13 +241,20 @@ def optimize_candidate_routes(
         elif pred_cong == "Severe":
             rec_reasons.append(f"⚠ Severe predicted congestion in {horizon} min")
 
-    # Phase 5: Expected delay
+    # Phase 5: Expected delay (includes live user hazard delays)
     if recommended.get("expected_delay_minutes") is not None:
         delay = recommended["expected_delay_minutes"]
         if delay > 2.0:
-            rec_reasons.append(f"⚠ Expected +{delay:.0f} min delay from current traffic")
+            rec_reasons.append(f"⚠ Expected +{delay:.0f} min delay from current traffic/hazards")
         else:
-            rec_reasons.append("✓ Minimal traffic delay expected")
+            rec_reasons.append("✓ Minimal traffic/hazard delay expected")
+
+    # Phase 7: Live user-reported hazards warning
+    active_hazards = recommended.get("active_hazards_nearby", 0)
+    if active_hazards > 0:
+        rec_reasons.append(f"⚠ Contains {active_hazards} active user hazard report{'s' if active_hazards > 1 else ''}")
+    else:
+        rec_reasons.append("✓ No active user-reported hazards")
 
     if recommended["duration_min"] == min_duration:
         rec_reasons.append("✓ Faster ETA")

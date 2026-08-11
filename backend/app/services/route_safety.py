@@ -190,9 +190,118 @@ def evaluate_route_safety(
     hotspots.sort(key=lambda h: h["accident_count"], reverse=True)
     hotspots = hotspots[:10]
 
+    # Evaluate live hazards
+    hazards_res = evaluate_route_live_hazards(db, waypoints, search_radius_km)
+    live_penalty = hazards_res["safety_penalty"]
+    
+    # Combined score, capped between 20.0 and 98.0
+    combined_safety_score = max(20.0, min(98.0, round(safety_score - live_penalty, 1)))
+
     return {
-        "empirical_safety_score": safety_score,
+        "empirical_safety_score": combined_safety_score,
         "total_accidents_nearby": total_matched,
         "fatal_accidents_nearby": fatal_count,
         "hotspots": hotspots,
+        "active_hazards_nearby": hazards_res["active_hazards_nearby"],
+        "live_hazards": hazards_res["live_hazards"],
+        "live_hazard_delay_minutes": hazards_res["delay_minutes"],
+    }
+
+
+def evaluate_route_live_hazards(
+    db: Session,
+    waypoints: List[List[float]],
+    search_radius_km: float = 0.3,
+) -> Dict[str, Any]:
+    """
+    Queries active user-reported hazards within the route bounding box
+    and filters those within the search radius of the waypoints.
+    """
+    if not waypoints or len(waypoints) < 2:
+        return {
+            "active_hazards_nearby": 0,
+            "live_hazards": [],
+            "safety_penalty": 0.0,
+            "delay_minutes": 0.0
+        }
+
+    sampled_points = decimate_waypoints(waypoints, target_spacing_km=0.4)
+    
+    # Calculate bounding box covering the sampled points with a buffer (~0.01 deg ~= 1.1km)
+    min_lat = min(p[0] for p in sampled_points) - 0.01
+    max_lat = max(p[0] for p in sampled_points) + 0.01
+    min_lng = min(p[1] for p in sampled_points) - 0.01
+    max_lng = max(p[1] for p in sampled_points) + 0.01
+
+    from ..models.road_hazard import RoadHazard  # Late import to avoid cyclic import issues
+
+    active_hazards = (
+        db.query(RoadHazard)
+        .filter(
+            RoadHazard.status == "Active",
+            RoadHazard.latitude.between(min_lat, max_lat),
+            RoadHazard.longitude.between(min_lng, max_lng),
+        )
+        .all()
+    )
+
+    if not active_hazards:
+        return {
+            "active_hazards_nearby": 0,
+            "live_hazards": [],
+            "safety_penalty": 0.0,
+            "delay_minutes": 0.0
+        }
+
+    matched_hazards = []
+    safety_penalty = 0.0
+    delay_minutes = 0.0
+
+    severity_penalties = {
+        "Critical": 15.0,
+        "High": 10.0,
+        "Medium": 5.0,
+        "Low": 2.0,
+    }
+
+    # Applied only to hazard types representing a real obstruction (e.g. Accident, Blocked, etc.)
+    type_delays = {
+        "Road blocked": {"Critical": 15.0, "High": 10.0, "Medium": 6.0, "Low": 3.0},
+        "Accident": {"Critical": 10.0, "High": 7.0, "Medium": 4.0, "Low": 2.0},
+        "Heavy traffic": {"Critical": 10.0, "High": 7.0, "Medium": 4.0, "Low": 2.0},
+        "Road construction": {"Critical": 8.0, "High": 5.0, "Medium": 3.0, "Low": 1.0},
+        "Waterlogging": {"Critical": 8.0, "High": 5.0, "Medium": 3.0, "Low": 1.0},
+    }
+
+    for h in active_hazards:
+        h_lat, h_lng = h.latitude, h.longitude
+        is_near_route = any(
+            haversine_distance(h_lat, h_lng, wp_lat, wp_lng) <= search_radius_km
+            for wp_lat, wp_lng in sampled_points
+        )
+
+        if is_near_route:
+            matched_hazards.append({
+                "id": h.id,
+                "hazard_type": h.hazard_type,
+                "severity": h.severity,
+                "latitude": h.latitude,
+                "longitude": h.longitude,
+                "description": h.description,
+                "created_at": h.created_at.isoformat() if h.created_at else None,
+            })
+
+            # Always apply safety penalty
+            safety_penalty += severity_penalties.get(h.severity, 5.0)
+
+            # Apply ETA delay ONLY if the hazard type represents a real obstruction
+            if h.hazard_type in type_delays:
+                severity_map = type_delays[h.hazard_type]
+                delay_minutes += severity_map.get(h.severity, 2.0)
+
+    return {
+        "active_hazards_nearby": len(matched_hazards),
+        "live_hazards": matched_hazards,
+        "safety_penalty": safety_penalty,
+        "delay_minutes": round(delay_minutes, 1)
     }

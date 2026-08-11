@@ -31,6 +31,9 @@ def test_auth_signup_flow():
     try:
         user_to_del = db_setup.query(User).filter(User.email == test_email).first()
         if user_to_del:
+            from app.models.road_hazard import RoadHazard
+            db_setup.query(RoadHazard).filter(RoadHazard.user_id == user_to_del.id).delete()
+            db_setup.commit()
             db_setup.delete(user_to_del)
             db_setup.commit()
         db_setup.query(OTPRecord).filter(OTPRecord.email == test_email).delete()
@@ -415,6 +418,91 @@ def test_road_hazards_endpoint():
     assert not any(h["id"] == hazard_id for h in nearby_after)
 
 
+def test_dynamic_hazard_routing_endpoint():
+    """Phase 7: Verify that active hazards dynamically update route safety scores, ETA delays, and alternate evaluations."""
+    # 1. Post a new active critical hazard on a route waypoint (e.g. at 12.9300, 77.6200)
+    payload_active = {
+        "hazard_type": "Road blocked",  # Blocked road triggers BOTH safety penalty and ETA delay
+        "severity": "Critical",
+        "latitude": 12.9300,
+        "longitude": 77.6200,
+        "description": "Critical road block for dynamic routing test."
+    }
+    response = client.post("/api/hazards", json=payload_active, headers=_auth_headers)
+    assert response.status_code == 201
+    active_hazard = response.json()
+    active_id = active_hazard["id"]
+
+    # 2. Post a second hazard that is RESOLVED (status=Resolved) to verify it is ignored by routing
+    payload_resolved = {
+        "hazard_type": "Accident",
+        "severity": "High",
+        "latitude": 12.9320,
+        "longitude": 77.6220,
+        "description": "Resolved accident to verify ignore rules."
+    }
+    response = client.post("/api/hazards", json=payload_resolved, headers=_auth_headers)
+    assert response.status_code == 201
+    resolved_hazard = response.json()
+    resolved_id = resolved_hazard["id"]
+    # Mark it resolved
+    response_resolve = client.put(f"/api/hazards/{resolved_id}/resolve", headers=_auth_headers)
+    assert response_resolve.status_code == 200
+
+    # 3. Call evaluate-route and verify safety penalties and active hazards are returned
+    payload_eval = {
+        "route_type": "safest",
+        "waypoints": [
+            [12.9716, 77.5946],
+            [12.9300, 77.6200],  # Right on the active hazard
+            [12.9320, 77.6220],  # Right on the resolved hazard
+            [12.9170, 77.6230]
+        ]
+    }
+    response = client.post("/api/navigation/evaluate-route", json=payload_eval, headers=_auth_headers)
+    assert response.status_code == 200
+    eval_data = response.json()
+    
+    # Assertions
+    assert eval_data["active_hazards_nearby"] == 1
+    # Verify the list contains only the active hazard
+    assert len(eval_data["live_hazards"]) == 1
+    assert eval_data["live_hazards"][0]["id"] == active_id
+
+    # 4. Call optimize-routes and verify the safety penalty and ETA delay are applied
+    payload_opt = {
+        "routes": [
+            {
+                "route_id": "safest_alternative",
+                "route_type": "safest",
+                "distance_km": 10.5,
+                "duration_min": 20.0,
+                "waypoints": [
+                    [12.9716, 77.5946],
+                    [12.9300, 77.6200],  # Passes through the active hazard
+                    [12.9170, 77.6230]
+                ]
+            }
+        ]
+    }
+    response = client.post("/api/navigation/optimize-routes", json=payload_opt, headers=_auth_headers)
+    assert response.status_code == 200
+    opt_data = response.json()
+    
+    # Verify the evaluated alternative route
+    opt_route = opt_data["routes"][0]
+    assert opt_route["active_hazards_nearby"] == 1
+    assert len(opt_route["live_hazards"]) == 1
+    # Expected delay: Road blocked (15.0 mins base for Critical)
+    assert opt_route["expected_delay_minutes"] >= 15.0
+    # Combined duration (duration_min + delays)
+    assert opt_route["eta_minutes"] >= 35.0
+
+    # 5. Cleanup active hazard so it doesn't affect subsequent test suites
+    response_cleanup = client.put(f"/api/hazards/{active_id}/resolve", headers=_auth_headers)
+    assert response_cleanup.status_code == 200
+
+
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
@@ -435,6 +523,7 @@ if __name__ == "__main__":
         ("Route Optimization Endpoint", test_route_optimization_endpoint),
         ("Route Traffic Intelligence Endpoint", test_route_traffic_intelligence_endpoint),
         ("Road Hazards Endpoint", test_road_hazards_endpoint),
+        ("Dynamic Hazard routing updates Endpoint", test_dynamic_hazard_routing_endpoint),
     ]
     print(f"Running NAVISCAPE Backend API Test Suite ({len(tests)} integration tests)...")
     for name, test_func in tests:
