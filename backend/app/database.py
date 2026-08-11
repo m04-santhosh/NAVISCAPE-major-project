@@ -92,6 +92,34 @@ def _migrate_accident_table():
         pass
 
 
+def _migrate_traffic_table():
+    """
+    Additive migration for the traffic_data table.
+    Checks for the existence of is_test, free_flow_speed, and speed_ratio columns,
+    and runs ALTER TABLE statements to add them if missing.
+    """
+    new_columns = {
+        "is_test": "BOOLEAN DEFAULT 0",
+        "free_flow_speed": "FLOAT",
+        "speed_ratio": "FLOAT",
+    }
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("PRAGMA table_info(traffic_data)")).fetchall()
+            if not rows:
+                return
+            existing_cols = {row[1] for row in rows}
+
+            for col_name, col_def in new_columns.items():
+                if col_name not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE traffic_data ADD COLUMN {col_name} {col_def}"))
+                    print(f"[MIGRATE] traffic_data: added column '{col_name}'")
+
+            conn.commit()
+    except Exception as exc:
+        print(f"[MIGRATE] traffic_data migration warning: {exc}")
+
+
 def init_db():
     """Create all tables and run additive migrations. Called on application startup."""
     # Register all models so Base.metadata knows about them
@@ -101,6 +129,7 @@ def init_db():
     # Run migrations BEFORE create_all so the table structure is correct
     _migrate_accident_table()
     _migrate_users_table()
+    _migrate_traffic_table()
 
     # create_all is safe — it only creates tables/columns that don't exist
     Base.metadata.create_all(bind=engine)

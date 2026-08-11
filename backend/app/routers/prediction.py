@@ -50,7 +50,19 @@ def _level(count: int) -> str:
     return "low"
 
 @router.post("/traffic", response_model=TrafficPredictionResponse)
-async def predict_traffic(data: TrafficPredictionRequest, current_user=Depends(get_current_user)):
+async def predict_traffic(
+    data: TrafficPredictionRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Try genuine LSTM prediction
+    from ..services.traffic_collector import predict_traffic_lstm
+    preds = predict_traffic_lstm(db, data.junction_id, data.hours_ahead, use_test_model=bool(data.use_test_model))
+    
+    if preds is not None:
+        return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
+        
+    # Heuristic fallback (clearly labeled)
     now = datetime.now()
     preds = []
     for i in range(data.hours_ahead):
@@ -65,6 +77,33 @@ async def predict_traffic(data: TrafficPredictionRequest, current_user=Depends(g
             "prediction_source": "hour_pattern_baseline",
         })
     return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
+
+
+@router.post("/train-lstm")
+async def trigger_lstm_training(
+    is_test: bool = False,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Triggers the LSTM model training pipeline using database observations.
+    If is_test is True, trains on test data and saves to a test model artifact.
+    Otherwise, trains on real TomTom data and saves to the production model.
+    """
+    from ..services.traffic_collector import train_lstm_from_db
+    res = train_lstm_from_db(db, is_test=is_test)
+    if res["trained"]:
+        return {
+            "status": "success",
+            "message": res["message"],
+            "observation_count": res["observation_count"],
+        }
+    else:
+        return {
+            "status": "insufficient_data",
+            "message": res["reason"],
+            "observation_count": res["observation_count"],
+        }
 
 @router.post("/risk", response_model=RiskPredictionResponse)
 async def predict_risk(

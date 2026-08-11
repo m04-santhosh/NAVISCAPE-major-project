@@ -234,3 +234,21 @@ async def evaluate_route_traffic(
         prediction_horizon_minutes=body.prediction_horizon_minutes,
     )
     return RouteTrafficResponse(**result)
+
+
+@router.post("/collect", tags=["Traffic Intelligence"])
+async def trigger_traffic_collection(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually triggers a TomTom traffic collection run immediately.
+    Collects speeds for all 8 monitored junctions and saves them in the database.
+    """
+    from ..services.traffic_collector import fetch_and_store_junction_traffic
+    stored_count = await fetch_and_store_junction_traffic(db)
+    return {
+        "status": "success",
+        "message": f"Successfully completed collection run. Stored {stored_count} observations.",
+        "stored_count": stored_count,
+    }

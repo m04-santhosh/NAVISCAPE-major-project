@@ -14,8 +14,12 @@ import math
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from sqlalchemy.orm import Session
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -267,6 +271,7 @@ def _hour_pattern_predict(junction_id: int, target_hour: int) -> Dict[str, Any]:
 def _get_route_junction_predictions(
     sampled_points: List[Tuple[float, float]],
     prediction_horizon_minutes: int = 30,
+    db: Optional[Session] = None,
 ) -> Dict[str, Any]:
     """
     Find which monitored junctions the route passes through and generate
@@ -290,55 +295,118 @@ def _get_route_junction_predictions(
             "reason": "Route does not pass through any monitored junction",
         }
 
-    # Try loading genuine LSTM model if present
-    lstm_available = _try_load_lstm()
-
-    if lstm_available and _lstm_model is not None and _lstm_scaler is not None:
+    # Try loading genuine LSTM model if present (checks for prod model)
+    global _lstm_model, _lstm_scaler, _lstm_loaded
+    if not _lstm_loaded:
+        _lstm_loaded = True
         try:
-            import numpy as np
-            junc_predictions = []
-            for j in matched_junctions:
-                # Use historical hour patterns window for inference if model exists
-                window = [[float(HOUR_PATTERNS.get(h, 150))] for h in range(24)]
-                window_arr = np.array(window, dtype="float32").reshape(1, 24, 1)
-                scaled_window = _lstm_scaler.transform(window_arr.reshape(-1, 1)).reshape(1, 24, 1)
-                pred_scaled = _lstm_model.predict(scaled_window, verbose=0)
-                pred_count = float(_lstm_scaler.inverse_transform(pred_scaled)[0][0])
-                pred_count = max(0.0, min(MAX_VEHICLE_COUNT * 1.2, pred_count))
-                normalized = min(1.0, pred_count / MAX_VEHICLE_COUNT)
-                predicted_score = round(max(10.0, min(98.0, (1.0 - normalized) * 100.0)), 1)
-                junc_predictions.append({
-                    "junction_id": j["id"],
-                    "junction_name": j["name"],
-                    "vehicle_count": int(pred_count),
-                    "predicted_traffic_score": predicted_score,
-                    "source": "lstm_model",
-                    "target_hour": target_hour,
-                })
-
-            avg_pred_score = round(
-                sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
+            import joblib
+            ml_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                "ml", "models",
             )
-            return {
-                "prediction_available": True,
-                "predicted_traffic_score": avg_pred_score,
-                "junction_predictions": junc_predictions,
-                "junctions_on_route": [j["name"] for j in matched_junctions],
-                "source": "lstm_model",
-                "prediction_horizon_minutes": prediction_horizon_minutes,
-                "target_hour": target_hour,
-            }
+            model_path = os.path.join(ml_dir, "traffic_lstm_prod.h5")
+            scaler_path = os.path.join(ml_dir, "traffic_scaler_prod.pkl")
+            if os.path.exists(model_path) and os.path.exists(scaler_path):
+                os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+                from tensorflow.keras.models import load_model
+                _lstm_model = load_model(model_path, compile=False)
+                _lstm_scaler = joblib.load(scaler_path)
         except Exception:
             pass
 
-    # If genuine LSTM model is not loaded, do NOT fabricate data
+    lstm_available = _lstm_model is not None and _lstm_scaler is not None
+
+    try:
+        import numpy as np
+        from ..models.traffic import TrafficData
+        
+        junc_predictions = []
+        has_any_lstm = False
+        
+        for j in matched_junctions:
+            has_lstm = False
+            # Production LSTM prediction is only evaluated for Junction 1 if sufficient real DB observations exist
+            if j["id"] == 1 and lstm_available and db is not None:
+                # Query last 24 hours of observations (must be real, non-test)
+                timestamps = [now - timedelta(hours=h) for h in range(24, 0, -1)]
+                sequence = []
+                for ts in timestamps:
+                    start_ts = ts - timedelta(minutes=30)
+                    end_ts = ts + timedelta(minutes=30)
+                    obs = (
+                        db.query(TrafficData)
+                        .filter(
+                            TrafficData.junction_id == j["id"],
+                            TrafficData.is_test == False,
+                            TrafficData.timestamp.between(start_ts, end_ts),
+                            TrafficData.speed_ratio != None
+                        )
+                        .order_by(TrafficData.timestamp.desc())
+                        .first()
+                    )
+                    if obs:
+                        sequence.append(float(obs.speed_ratio))
+                    else:
+                        break
+                
+                if len(sequence) == 24:
+                    has_lstm = True
+                    has_any_lstm = True
+                    # Run LSTM prediction on speed ratio
+                    window_arr = np.array(sequence, dtype="float32").reshape(1, 24, 1)
+                    scaled_window = _lstm_scaler.transform(window_arr.reshape(-1, 1)).reshape(1, 24, 1)
+                    pred_scaled = _lstm_model.predict(scaled_window, verbose=0)
+                    pred_speed_ratio = float(_lstm_scaler.inverse_transform(pred_scaled)[0][0])
+                    pred_speed_ratio = max(0.0, min(1.0, pred_speed_ratio))
+                    
+                    # Compute score: higher speed ratio = better traffic (less congestion)
+                    predicted_score = round(max(10.0, min(98.0, pred_speed_ratio * 100.0)), 1)
+                    pred_count = int((1.0 - pred_speed_ratio) * MAX_VEHICLE_COUNT)
+
+                    junc_predictions.append({
+                        "junction_id": j["id"],
+                        "junction_name": j["name"],
+                        "vehicle_count": pred_count,
+                        "predicted_traffic_score": predicted_score,
+                        "source": "lstm_model",
+                        "target_hour": target_hour,
+                    })
+
+            if not has_lstm:
+                # Fall back to heuristic hour patterns model
+                hp = _hour_pattern_predict(j["id"], target_hour)
+                junc_predictions.append({
+                    "junction_id": j["id"],
+                    "junction_name": j["name"],
+                    "vehicle_count": hp["vehicle_count"],
+                    "predicted_traffic_score": hp["predicted_traffic_score"],
+                    "source": "hour_pattern_model",
+                    "target_hour": target_hour,
+                })
+
+        avg_pred_score = round(
+            sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
+        )
+        return {
+            "prediction_available": has_any_lstm,  # ONLY True if genuine LSTM ran successfully
+            "predicted_traffic_score": avg_pred_score,
+            "junction_predictions": junc_predictions,
+            "junctions_on_route": [j["name"] for j in matched_junctions],
+            "source": "lstm_model" if has_any_lstm else "hour_pattern_model",
+            "prediction_horizon_minutes": prediction_horizon_minutes,
+            "target_hour": target_hour,
+        }
+    except Exception as e:
+        logger.exception("Error in route junction prediction:")
+
     return {
         "prediction_available": False,
-        "reason": "Legitimate historical traffic time-series dataset is missing for LSTM model training",
+        "reason": "Legitimate historical traffic observations are missing or LSTM model is not trained yet",
         "predicted_traffic_score": None,
         "junction_predictions": [],
         "junctions_on_route": [j["name"] for j in matched_junctions],
-        "source": "lstm_unavailable",
+        "source": "hour_pattern_model",
         "prediction_horizon_minutes": prediction_horizon_minutes,
         "target_hour": target_hour,
     }
@@ -415,6 +483,7 @@ async def evaluate_route_traffic_intelligence(
     duration_min: float = 0.0,
     tomtom_api_key: str = "",
     prediction_horizon_minutes: int = 30,
+    db: Optional[Session] = None,
 ) -> Dict[str, Any]:
     """
     Full route traffic intelligence assessment for Phase 5.
@@ -460,7 +529,7 @@ async def evaluate_route_traffic_intelligence(
         expected_delay = None
 
     # ── Step 2: Predictions for junctions on route ───────────────────────────
-    pred_data = _get_route_junction_predictions(sampled, prediction_horizon_minutes)
+    pred_data = _get_route_junction_predictions(sampled, prediction_horizon_minutes, db=db)
 
     prediction_available = pred_data.get("prediction_available", False)
     predicted_score: Optional[float] = pred_data.get("predicted_traffic_score") if prediction_available else None

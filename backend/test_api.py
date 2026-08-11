@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 # Ensure database tables and migrations are initialized
 init_db()
 
-client = TestClient(app)
+client = TestClient(app, raise_server_exceptions=False)
 
 
 # ── Global token store for authenticated requests ─────────────────────────────
@@ -183,7 +183,11 @@ def test_health_check():
 
 
 def test_accidents_stats_endpoint():
-    response = client.get("/api/accidents/stats")
+    # Verify unauthenticated request is blocked
+    response_unauth = client.get("/api/accidents/stats")
+    assert response_unauth.status_code == 401
+    
+    response = client.get("/api/accidents/stats", headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "total_records" in data
@@ -194,7 +198,11 @@ def test_accidents_stats_endpoint():
 
 
 def test_accidents_list_endpoint():
-    response = client.get("/api/accidents?limit=5")
+    # Verify unauthenticated request is blocked
+    response_unauth = client.get("/api/accidents?limit=5")
+    assert response_unauth.status_code == 401
+
+    response = client.get("/api/accidents?limit=5", headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -206,7 +214,11 @@ def test_accidents_list_endpoint():
 
 
 def test_accidents_heatmap_endpoint():
-    response = client.get("/api/accidents/heatmap?limit=100")
+    # Verify unauthenticated request is blocked
+    response_unauth = client.get("/api/accidents/heatmap?limit=100")
+    assert response_unauth.status_code == 401
+
+    response = client.get("/api/accidents/heatmap?limit=100", headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -218,7 +230,11 @@ def test_accidents_heatmap_endpoint():
 
 
 def test_accidents_clusters_endpoint():
-    response = client.get("/api/accidents/clusters")
+    # Verify unauthenticated request is blocked
+    response_unauth = client.get("/api/accidents/clusters")
+    assert response_unauth.status_code == 401
+
+    response = client.get("/api/accidents/clusters", headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -230,8 +246,12 @@ def test_accidents_clusters_endpoint():
 
 
 def test_accidents_bounds_endpoint():
+    # Verify unauthenticated request is blocked
+    response_unauth = client.get("/api/accidents/bounds?min_lat=12.5&max_lat=13.5&min_lng=77.0&max_lng=78.0&limit=5")
+    assert response_unauth.status_code == 401
+
     # Bounding box covering Bangalore region
-    response = client.get("/api/accidents/bounds?min_lat=12.5&max_lat=13.5&min_lng=77.0&max_lng=78.0&limit=5")
+    response = client.get("/api/accidents/bounds?min_lat=12.5&max_lat=13.5&min_lng=77.0&max_lng=78.0&limit=5", headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -503,6 +523,179 @@ def test_dynamic_hazard_routing_endpoint():
     assert response_cleanup.status_code == 200
 
 
+def test_lstm_traffic_prediction_pipeline():
+    """Phase 8: Test TomTom manual traffic collection, LSTM training pipeline (test mode), and LSTM prediction inference."""
+    db = SessionLocal()
+    try:
+        import os
+        from app.models.traffic import TrafficData
+
+        # 1. Test manual collection endpoint
+        res_collect = client.post("/api/traffic/collect", headers=_auth_headers)
+        assert res_collect.status_code == 200
+        data_coll = res_collect.json()
+        assert data_coll["status"] == "success"
+        assert "stored_count" in data_coll
+
+        # 2. Test LSTM training pipeline with insufficient data warning
+        db.query(TrafficData).filter(TrafficData.is_test == True).delete()
+        db.commit()
+
+        res_train_fail = client.post("/api/predict/train-lstm?is_test=true", headers=_auth_headers)
+        assert res_train_fail.status_code == 200
+        data_train_fail = res_train_fail.json()
+        assert data_train_fail["status"] == "insufficient_data"
+        assert "More data is required" in data_train_fail["message"]
+
+        # 3. Seed test observations for training
+        # We need 120 observations for Junction 1 (Silk Board)
+        now = datetime.now()
+        for i in range(125):
+            ts = now - timedelta(hours=125 - i)
+            speed_ratio = 0.8 - (i % 5) * 0.05
+            obs = TrafficData(
+                junction_id=1,
+                latitude=12.9170,
+                longitude=77.6230,
+                timestamp=ts,
+                vehicle_count=0,
+                avg_speed=50.0 * speed_ratio,
+                free_flow_speed=50.0,
+                speed_ratio=speed_ratio,
+                day_of_week=ts.weekday(),
+                hour_of_day=ts.hour,
+                is_test=True
+            )
+            db.add(obs)
+        db.commit()
+
+        # 4. Trigger training on the seeded test observations
+        res_train_success = client.post("/api/predict/train-lstm?is_test=true", headers=_auth_headers)
+        assert res_train_success.status_code == 200
+        data_train_success = res_train_success.json()
+        assert data_train_success["status"] == "success"
+        assert "Successfully trained LSTM" in data_train_success["message"]
+
+        # 5. Verify LSTM prediction works using the trained test model
+        payload_pred = {
+            "junction_id": 1,
+            "hours_ahead": 5,
+            "use_test_model": True
+        }
+        res_pred = client.post("/api/predict/traffic", json=payload_pred, headers=_auth_headers)
+        assert res_pred.status_code == 200
+        data_pred = res_pred.json()
+        assert data_pred["junction_id"] == 1
+        assert len(data_pred["predictions"]) == 5
+        for p in data_pred["predictions"]:
+            assert p["prediction_source"] == "lstm_model"
+            assert "predicted_vehicle_count" in p
+            assert "congestion_level" in p
+            assert p["confidence"] == 0.90
+
+        # 6. Verify that requesting production model (default) falls back to heuristic if no prod model exists
+        payload_pred_prod = {
+            "junction_id": 1,
+            "hours_ahead": 5,
+            "use_test_model": False
+        }
+        res_pred_prod = client.post("/api/predict/traffic", json=payload_pred_prod, headers=_auth_headers)
+        assert res_pred_prod.status_code == 200
+        data_pred_prod = res_pred_prod.json()
+        for p in data_pred_prod["predictions"]:
+            assert p["prediction_source"] == "hour_pattern_baseline"
+
+        # 7. Cleanup test observations and generated test models/scalers
+        db.query(TrafficData).filter(TrafficData.is_test == True).delete()
+        db.commit()
+
+        ml_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "ml", "models",
+        )
+        for filename in ["traffic_lstm_test.h5", "traffic_scaler_test.pkl"]:
+            path = os.path.join(ml_dir, filename)
+            if os.path.exists(path):
+                os.remove(path)
+
+    finally:
+        db.close()
+
+
+def test_user_data_isolation():
+    """Phase 9: Verify user data isolation on road hazards (modifications) and route history."""
+    db = SessionLocal()
+    try:
+        from app.models.user import User
+        from app.middleware.auth import hash_pin, create_access_token
+
+        # Ensure userB is registered
+        email_b = "user_b_isolation_test@example.com"
+        user_b = db.query(User).filter(User.email == email_b).first()
+        if not user_b:
+            user_b = User(
+                email=email_b,
+                username=email_b,
+                hashed_password="",
+                email_verified=True,
+                pin_hash=hash_pin("123456"),
+                is_active=True,
+            )
+            db.add(user_b)
+            db.commit()
+            db.refresh(user_b)
+
+        token_b = create_access_token(data={"sub": str(user_b.id)})
+        auth_headers_b = {"Authorization": f"Bearer {token_b}"}
+
+        # 2. Report a hazard as User A (current_user)
+        payload_hazard = {
+            "hazard_type": "Accident",
+            "severity": "High",
+            "latitude": 12.9170,
+            "longitude": 77.6230,
+            "description": "User A road hazard report"
+        }
+        res_hazard = client.post("/api/hazards", json=payload_hazard, headers=_auth_headers)
+        assert res_hazard.status_code == 201
+        hazard_data = res_hazard.json()
+        hazard_id = hazard_data["id"]
+
+        # 3. Try to resolve User A's hazard using User B's auth headers (should fail with 403)
+        res_resolve_fail = client.put(f"/api/hazards/{hazard_id}/resolve", headers=auth_headers_b)
+        assert res_resolve_fail.status_code == 403
+        assert "do not have permission" in res_resolve_fail.json()["detail"]
+
+        # 4. Resolve the hazard as User A (should succeed)
+        res_resolve_ok = client.put(f"/api/hazards/{hazard_id}/resolve", headers=_auth_headers)
+        assert res_resolve_ok.status_code == 200
+
+        # Clean up User B
+        db.delete(user_b)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_global_exception_handling():
+    """Phase 9: Verify unhandled exceptions are masked and logged, returning generic 500 responses."""
+    # Register dynamic test route that raises exception
+    from app.main import app as fastapi_app
+    
+    @fastapi_app.get("/api/test-exception-endpoint")
+    def trigger_internal_exception():
+        raise Exception("Sensitive DB Connection string: postgres://admin:secret@db.host:5432/db")
+
+    # Send request and verify details are masked
+    response = client.get("/api/test-exception-endpoint")
+    assert response.status_code == 500
+    data = response.json()
+    assert "detail" in data
+    assert "internal server error occurred" in data["detail"]
+    assert "postgres" not in data["detail"]  # No credentials exposed
+    assert "secret" not in data["detail"]
+
+
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
@@ -524,6 +717,9 @@ if __name__ == "__main__":
         ("Route Traffic Intelligence Endpoint", test_route_traffic_intelligence_endpoint),
         ("Road Hazards Endpoint", test_road_hazards_endpoint),
         ("Dynamic Hazard routing updates Endpoint", test_dynamic_hazard_routing_endpoint),
+        ("LSTM Traffic Collection & Training Pipeline Endpoint", test_lstm_traffic_prediction_pipeline),
+        ("User Data Isolation Endpoint", test_user_data_isolation),
+        ("Global Exception Handling Endpoint", test_global_exception_handling),
     ]
     print(f"Running NAVISCAPE Backend API Test Suite ({len(tests)} integration tests)...")
     for name, test_func in tests:

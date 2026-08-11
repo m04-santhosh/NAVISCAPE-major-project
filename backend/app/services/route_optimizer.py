@@ -70,6 +70,7 @@ def optimize_candidate_routes(
                             distance_km=distance_km,
                             duration_min=duration_min,
                             tomtom_api_key=settings.TOMTOM_API_KEY,
+                            db=db,
                         ),
                     )
                     return future.result(timeout=15)
@@ -80,6 +81,7 @@ def optimize_candidate_routes(
                         distance_km=distance_km,
                         duration_min=duration_min,
                         tomtom_api_key=settings.TOMTOM_API_KEY,
+                        db=db,
                     )
                 )
         except Exception:

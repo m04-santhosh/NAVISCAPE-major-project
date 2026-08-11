@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
+from ..middleware.auth import get_current_user
+
 from ..database import get_db
 from ..models.accident import AccidentData
 from ..schemas.accident import (
@@ -43,6 +45,7 @@ async def get_accidents(
     severity: Optional[str] = Query(None, description="Filter by severity e.g. Fatal"),
     limit: int = Query(100, ge=1, le=2000, description="Max records to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Retrieve filtered accident records with pagination."""
@@ -69,6 +72,7 @@ async def get_accidents_in_bounds(
     min_lng: float = Query(..., description="Minimum longitude"),
     max_lng: float = Query(..., description="Maximum longitude"),
     limit: int = Query(500, ge=1, le=5000, description="Max points to return"),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get accident records within a geographic bounding box."""
@@ -83,6 +87,7 @@ async def get_accidents_in_bounds(
 async def get_accident_heatmap(
     district: Optional[str] = Query(None, description="Filter heatmap by district"),
     limit: int = Query(3000, ge=100, le=10000, description="Max points for heatmap"),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get weighted heatmap data points for map visualization across Karnataka."""
@@ -121,6 +126,7 @@ async def get_accident_heatmap(
 @router.get("/clusters", response_model=List[AccidentCluster])
 async def get_accident_clusters(
     district: Optional[str] = Query(None, description="Filter clusters by district"),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -213,7 +219,10 @@ async def get_accident_clusters(
 
 
 @router.get("/stats", response_model=AccidentStatsResponse)
-async def get_accident_stats(db: Session = Depends(get_db)):
+async def get_accident_stats(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get aggregated statistics from the Karnataka accident dataset."""
     total_records = db.query(AccidentData).count()
     coords_count = db.query(AccidentData).filter(

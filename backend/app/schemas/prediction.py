@@ -9,6 +9,7 @@ from typing import Optional, List
 class TrafficPredictionRequest(BaseModel):
     junction_id: int
     hours_ahead: int = 24
+    use_test_model: Optional[bool] = False
 
 
 class TrafficPredictionResponse(BaseModel):

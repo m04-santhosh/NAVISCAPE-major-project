@@ -3,7 +3,7 @@ Traffic Data ORM Model
 Stores historical and real-time traffic measurements at junctions.
 """
 
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, func, Boolean
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -21,6 +21,9 @@ class TrafficData(Base):
     congestion_level = Column(String(20), nullable=True)  # low, medium, high, critical
     day_of_week = Column(Integer, nullable=True)  # 0=Monday, 6=Sunday
     hour_of_day = Column(Integer, nullable=True)  # 0-23
+    is_test = Column(Boolean, default=False, nullable=True)
+    free_flow_speed = Column(Float, nullable=True)
+    speed_ratio = Column(Float, nullable=True)
 
     def __repr__(self):
         return f"<TrafficData(junction={self.junction_id}, time={self.timestamp}, vehicles={self.vehicle_count})>"
