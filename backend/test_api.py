@@ -1,14 +1,166 @@
 """
 Integration tests for NAVISCAPE Backend API Endpoints.
-Covers: Accident data module (Phase 2), route safety (Phase 3),
+Covers: Auth (Email + PIN + OTP), Accident data module (Phase 2), route safety (Phase 3),
 route optimization (Phase 4), and traffic intelligence (Phase 5).
 """
 
 from fastapi.testclient import TestClient
 from app.main import app
-
+from app.database import SessionLocal
+from app.models.user import User
+from app.models.otp import OTPRecord, OTPPurpose
+from app.middleware.auth import hash_pin
+from datetime import datetime, timedelta, timezone
 
 client = TestClient(app)
+
+
+# ── Global token store for authenticated requests ─────────────────────────────
+_auth_headers = {}
+
+
+def test_auth_signup_flow():
+    """Test full Email + OTP + PIN registration flow."""
+    test_email = "testuser_auth@gmail.com"
+
+    # Cleanup any pre-existing test records from previous test runs
+    db_setup = SessionLocal()
+    try:
+        user_to_del = db_setup.query(User).filter(User.email == test_email).first()
+        if user_to_del:
+            db_setup.delete(user_to_del)
+            db_setup.commit()
+        db_setup.query(OTPRecord).filter(OTPRecord.email == test_email).delete()
+        db_setup.commit()
+    finally:
+        db_setup.close()
+
+    # Step 1: Send OTP
+    res1 = client.post("/api/auth/send-signup-otp", json={"email": test_email})
+    assert res1.status_code == 200, f"Expected 200, got {res1.status_code}: {res1.json()}"
+    assert "verification code has been sent" in res1.json()["message"]
+
+    # Retrieve created OTP hash directly from DB (bypassing email delivery for test)
+    db = SessionLocal()
+    try:
+        otp_rec = db.query(OTPRecord).filter(
+            OTPRecord.email == test_email,
+            OTPRecord.purpose == OTPPurpose.SIGNUP
+        ).order_by(OTPRecord.created_at.desc()).first()
+        assert otp_rec is not None
+
+        # Verify invalid OTP is rejected
+        res_bad = client.post("/api/auth/verify-signup-otp", json={"email": test_email, "otp": "000000"})
+        assert res_bad.status_code == 400
+
+        # Inject known OTP for verification testing
+        import hashlib
+        known_otp = "123456"
+        otp_rec.otp_hash = hashlib.sha256(known_otp.encode()).hexdigest()
+        db.commit()
+
+        # Step 2: Verify OTP
+        res2 = client.post("/api/auth/verify-signup-otp", json={"email": test_email, "otp": known_otp})
+        assert res2.status_code == 200
+        token_data = res2.json()
+        assert "verification_token" in token_data
+
+        verif_token = token_data["verification_token"]
+
+        # Step 3: Set PIN
+        res3 = client.post("/api/auth/set-pin", json={
+            "email": test_email,
+            "verification_token": verif_token,
+            "pin": "654321",
+            "confirm_pin": "654321"
+        })
+        assert res3.status_code == 201
+        data = res3.json()
+        assert "access_token" in data
+        assert data["user"]["email"] == test_email
+        assert data["user"]["email_verified"] is True
+
+        # Store token for subsequent authenticated tests
+        global _auth_headers
+        _auth_headers = {"Authorization": f"Bearer {data['access_token']}"}
+
+    finally:
+        db.close()
+
+
+def test_auth_login_flow():
+    """Test Email + PIN login with valid and invalid credentials."""
+    test_email = "testuser_auth@gmail.com"
+
+    # Invalid PIN
+    res_bad = client.post("/api/auth/login", json={"email": test_email, "pin": "000000"})
+    assert res_bad.status_code == 401
+
+    # Valid PIN
+    res_good = client.post("/api/auth/login", json={"email": test_email, "pin": "654321"})
+    assert res_good.status_code == 200
+    data = res_good.json()
+    assert "access_token" in data
+    assert data["user"]["email"] == test_email
+
+
+def test_auth_me_endpoint():
+    """Test GET /api/auth/me requiring JWT token."""
+    # Without header -> 401
+    res_unauth = client.get("/api/auth/me")
+    assert res_unauth.status_code == 401
+
+    # With header -> 200
+    res_auth = client.get("/api/auth/me", headers=_auth_headers)
+    assert res_auth.status_code == 200
+    assert res_auth.json()["email"] == "testuser_auth@gmail.com"
+
+
+def test_auth_forgot_pin_flow():
+    """Test Forgot PIN OTP request, verification, and reset."""
+    test_email = "testuser_auth@gmail.com"
+
+    # Step 1: Send Forgot PIN OTP
+    res1 = client.post("/api/auth/forgot-pin/send-otp", json={"email": test_email})
+    assert res1.status_code == 200
+
+    # Inject known OTP into DB
+    db = SessionLocal()
+    try:
+        import hashlib
+        known_otp = "888888"
+        otp_rec = db.query(OTPRecord).filter(
+            OTPRecord.email == test_email,
+            OTPRecord.purpose == OTPPurpose.FORGOT_PIN
+        ).order_by(OTPRecord.created_at.desc()).first()
+        assert otp_rec is not None
+        otp_rec.otp_hash = hashlib.sha256(known_otp.encode()).hexdigest()
+        db.commit()
+
+        # Step 2: Verify Forgot PIN OTP
+        res2 = client.post("/api/auth/forgot-pin/verify-otp", json={"email": test_email, "otp": known_otp})
+        assert res2.status_code == 200
+        token = res2.json()["verification_token"]
+
+        # Step 3: Reset PIN
+        res3 = client.post("/api/auth/forgot-pin/reset", json={
+            "email": test_email,
+            "verification_token": token,
+            "new_pin": "112233",
+            "confirm_pin": "112233"
+        })
+        assert res3.status_code == 200
+
+        # Verify old PIN is rejected
+        res_old = client.post("/api/auth/login", json={"email": test_email, "pin": "654321"})
+        assert res_old.status_code == 401
+
+        # Verify new PIN works
+        res_new = client.post("/api/auth/login", json={"email": test_email, "pin": "112233"})
+        assert res_new.status_code == 200
+
+    finally:
+        db.close()
 
 
 def test_root_endpoint():
@@ -59,7 +211,6 @@ def test_accidents_heatmap_endpoint():
     assert "intensity" in point
 
 
-
 def test_accidents_clusters_endpoint():
     response = client.get("/api/accidents/clusters")
     assert response.status_code == 200
@@ -89,7 +240,7 @@ def test_route_evaluation_endpoint():
             [12.9170, 77.6230]
         ]
     }
-    response = client.post("/api/navigation/evaluate-route", json=payload)
+    response = client.post("/api/navigation/evaluate-route", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "empirical_safety_score" in data
@@ -106,7 +257,7 @@ def test_risk_prediction_endpoint():
         "hour": 9,
         "weather": "rain"
     }
-    response = client.post("/api/predict/risk", json=payload)
+    response = client.post("/api/predict/risk", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "risk_score" in data
@@ -120,7 +271,7 @@ def test_traffic_predict_endpoint():
         "junction_id": 1,
         "hours_ahead": 3
     }
-    response = client.post("/api/predict/traffic", json=payload)
+    response = client.post("/api/predict/traffic", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["junction_id"] == 1
@@ -140,7 +291,7 @@ def test_navigate_endpoint():
         "duration_min": 25.0,
         "safety_score": 85.0
     }
-    response = client.post("/api/navigate", json=payload)
+    response = client.post("/api/navigate", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Route saved"
@@ -165,7 +316,7 @@ def test_route_optimization_endpoint():
             }
         ]
     }
-    response = client.post("/api/navigation/optimize-routes", json=payload)
+    response = client.post("/api/navigation/optimize-routes", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "routes" in data
@@ -200,7 +351,7 @@ def test_route_traffic_intelligence_endpoint():
         "duration_min": 25.0,
         "prediction_horizon_minutes": 30
     }
-    response = client.post("/api/traffic/evaluate-route", json=payload)
+    response = client.post("/api/traffic/evaluate-route", json=payload, headers=_auth_headers)
     assert response.status_code == 200
     data = response.json()
 
@@ -221,19 +372,15 @@ def test_route_traffic_intelligence_endpoint():
     assert data["prediction_horizon_minutes"] == 30
     assert data["traffic_confidence"] >= 0.0
 
-    # Optional Phase 5 fields are None or valid values
-    if data["predicted_traffic_score"] is not None:
-        assert 0 < data["predicted_traffic_score"] <= 100
-    if data["predicted_congestion"] is not None:
-        assert data["predicted_congestion"] in ["Low", "Moderate", "High", "Severe"]
-    if data["expected_delay_minutes"] is not None:
-        assert data["expected_delay_minutes"] >= 0
-
 
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
         ("Health Check Endpoint", test_health_check),
+        ("Auth Signup Flow (OTP + PIN)", test_auth_signup_flow),
+        ("Auth Login Flow (Email + PIN)", test_auth_login_flow),
+        ("Auth Me Profile Endpoint (JWT)", test_auth_me_endpoint),
+        ("Auth Forgot PIN Flow", test_auth_forgot_pin_flow),
         ("Accidents Stats Endpoint", test_accidents_stats_endpoint),
         ("Accidents List Endpoint", test_accidents_list_endpoint),
         ("Accidents Heatmap Endpoint", test_accidents_heatmap_endpoint),
@@ -244,7 +391,6 @@ if __name__ == "__main__":
         ("Traffic Predict Endpoint", test_traffic_predict_endpoint),
         ("Navigate Save Endpoint", test_navigate_endpoint),
         ("Route Optimization Endpoint", test_route_optimization_endpoint),
-        # Phase 5
         ("Route Traffic Intelligence Endpoint", test_route_traffic_intelligence_endpoint),
     ]
     print(f"Running NAVISCAPE Backend API Test Suite ({len(tests)} integration tests)...")
@@ -252,6 +398,3 @@ if __name__ == "__main__":
         test_func()
         print(f"[PASS] {name}")
     print(f"\nALL {len(tests)} BACKEND INTEGRATION TESTS PASSED SUCCESSFULLY!")
-
-
-

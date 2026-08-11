@@ -1,17 +1,57 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { ThemeProvider } from './context/ThemeContext';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/layout/Sidebar';
 
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import Navigation from './pages/Navigation';
 import Analytics from './pages/Analytics';
-import AdminPanel from './pages/AdminPanel';
 import About from './pages/About';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import ForgotPin from './pages/ForgotPin';
 
-/** Layout wrapper with sidebar */
+/** Route guard: redirects unauthenticated users to /login */
+function ProtectedRoute() {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-950">
+        <div className="w-12 h-12 border-4 border-primary-500/30 border-t-primary-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <Outlet />;
+}
+
+/** Route guard for public auth pages (redirects to /dashboard if already logged in) */
+function PublicOnlyRoute({ children }) {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-950">
+        <div className="w-12 h-12 border-4 border-primary-500/30 border-t-primary-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return children;
+}
+
+/** Layout wrapper with sidebar for authenticated app pages */
 function AppLayout() {
   return (
     <div className="flex min-h-screen">
@@ -37,20 +77,26 @@ export default function App() {
             }}
           />
           <Routes>
-            {/* Public routes */}
+            {/* Public landing page */}
             <Route path="/" element={<Home />} />
 
-            {/* App routes with sidebar */}
-            <Route element={<AppLayout />}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/navigate" element={<Navigation />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/about" element={<About />} />
-              <Route path="/admin" element={<AdminPanel />} />
+            {/* Public authentication screens */}
+            <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
+            <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
+            <Route path="/forgot-pin" element={<PublicOnlyRoute><ForgotPin /></PublicOnlyRoute>} />
+
+            {/* Authenticated application routes with sidebar */}
+            <Route element={<ProtectedRoute />}>
+              <Route element={<AppLayout />}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/navigate" element={<Navigation />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/about" element={<About />} />
+              </Route>
             </Route>
 
             {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/" />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

@@ -1,6 +1,10 @@
 @echo off
 echo Starting NAVISCAPE Backend...
-start cmd /k "cd backend && if not exist venv (python -m venv venv) && venv\Scripts\activate && pip install -r requirements.txt && python run.py"
+if exist "backend\venv\Scripts\activate.bat" (
+    start cmd /k "cd backend && call venv\Scripts\activate && python run.py"
+) else (
+    start cmd /k "cd backend && python run.py"
+)
 
 echo Starting NAVISCAPE Frontend...
 start cmd /k "cd frontend && npm run dev"

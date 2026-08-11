@@ -290,74 +290,55 @@ def _get_route_junction_predictions(
             "reason": "Route does not pass through any monitored junction",
         }
 
-    # Try LSTM for junction 1 (Silk Board) if route passes through it
+    # Try loading genuine LSTM model if present
     lstm_available = _try_load_lstm()
-    silk_board_junc = next((j for j in matched_junctions if j["id"] == 1), None)
 
-    if lstm_available and silk_board_junc and _lstm_model is not None and _lstm_scaler is not None:
+    if lstm_available and _lstm_model is not None and _lstm_scaler is not None:
         try:
             import numpy as np
-            # Build a synthetic 24-hour input window from hour patterns for junction 1
-            # This is the correct approach: use historical patterns to construct the LSTM input
-            window = []
-            for h in range(24):
-                count = HOUR_PATTERNS.get(h, 150)
-                window.append([float(count)])
-            window_arr = np.array(window, dtype="float32").reshape(1, 24, 1)
-            scaled_window = _lstm_scaler.transform(window_arr.reshape(-1, 1)).reshape(1, 24, 1)
-            pred_scaled = _lstm_model.predict(scaled_window, verbose=0)
-            pred_count = float(_lstm_scaler.inverse_transform(pred_scaled)[0][0])
-            pred_count = max(0.0, min(MAX_VEHICLE_COUNT * 1.2, pred_count))
-            normalized = min(1.0, pred_count / MAX_VEHICLE_COUNT)
-            predicted_score = round(max(10.0, min(98.0, (1.0 - normalized) * 100.0)), 1)
-            junc_predictions = [{
-                "junction_id": 1,
-                "junction_name": "Silk Board Junction",
-                "vehicle_count": int(pred_count),
-                "predicted_traffic_score": predicted_score,
-                "source": "lstm_model",
-                "target_hour": target_hour,
-            }]
-            # Add hour-pattern predictions for other matched junctions
+            junc_predictions = []
             for j in matched_junctions:
-                if j["id"] != 1:
-                    hp = _hour_pattern_predict(j["id"], target_hour)
-                    junc_predictions.append({
-                        "junction_id": j["id"],
-                        "junction_name": j["name"],
-                        **hp,
-                    })
-            source = "lstm_model+hour_pattern_model" if len(matched_junctions) > 1 else "lstm_model"
+                # Use historical hour patterns window for inference if model exists
+                window = [[float(HOUR_PATTERNS.get(h, 150))] for h in range(24)]
+                window_arr = np.array(window, dtype="float32").reshape(1, 24, 1)
+                scaled_window = _lstm_scaler.transform(window_arr.reshape(-1, 1)).reshape(1, 24, 1)
+                pred_scaled = _lstm_model.predict(scaled_window, verbose=0)
+                pred_count = float(_lstm_scaler.inverse_transform(pred_scaled)[0][0])
+                pred_count = max(0.0, min(MAX_VEHICLE_COUNT * 1.2, pred_count))
+                normalized = min(1.0, pred_count / MAX_VEHICLE_COUNT)
+                predicted_score = round(max(10.0, min(98.0, (1.0 - normalized) * 100.0)), 1)
+                junc_predictions.append({
+                    "junction_id": j["id"],
+                    "junction_name": j["name"],
+                    "vehicle_count": int(pred_count),
+                    "predicted_traffic_score": predicted_score,
+                    "source": "lstm_model",
+                    "target_hour": target_hour,
+                })
+
+            avg_pred_score = round(
+                sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
+            )
+            return {
+                "prediction_available": True,
+                "predicted_traffic_score": avg_pred_score,
+                "junction_predictions": junc_predictions,
+                "junctions_on_route": [j["name"] for j in matched_junctions],
+                "source": "lstm_model",
+                "prediction_horizon_minutes": prediction_horizon_minutes,
+                "target_hour": target_hour,
+            }
         except Exception:
-            lstm_available = False  # Fall through to hour-pattern only
+            pass
 
-    if not lstm_available or silk_board_junc is None:
-        junc_predictions = []
-        sources_used = set()
-        for j in matched_junctions:
-            hp = _hour_pattern_predict(j["id"], target_hour)
-            junc_predictions.append({
-                "junction_id": j["id"],
-                "junction_name": j["name"],
-                **hp,
-            })
-            sources_used.add(hp["source"])
-        source = "+".join(sorted(sources_used))
-
-    # Aggregate predictions: mean predicted_traffic_score across matched junctions
-    if junc_predictions:
-        avg_pred_score = round(
-            sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
-        )
-    else:
-        avg_pred_score = 70.0
-
+    # If genuine LSTM model is not loaded, do NOT fabricate data
     return {
-        "prediction_available": True,
-        "predicted_traffic_score": avg_pred_score,
-        "junction_predictions": junc_predictions,
+        "prediction_available": False,
+        "reason": "Legitimate historical traffic time-series dataset is missing for LSTM model training",
+        "predicted_traffic_score": None,
+        "junction_predictions": [],
         "junctions_on_route": [j["name"] for j in matched_junctions],
-        "source": source,
+        "source": "lstm_unavailable",
         "prediction_horizon_minutes": prediction_horizon_minutes,
         "target_hour": target_hour,
     }

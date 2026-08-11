@@ -1,15 +1,20 @@
 """
 Prediction Router
-ML-powered traffic prediction, risk analysis, and congestion forecasting.
+Genuinely trained XGBoost accident risk prediction and historical accident intelligence.
 """
-import random, math
+import math
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from ..database import get_db
 from ..middleware.auth import get_current_user
+from ..models.accident import AccidentData
 from ..schemas.prediction import (
     TrafficPredictionRequest, TrafficPredictionResponse,
     RiskPredictionRequest, RiskPredictionResponse,
 )
+from ..services.risk_ml import predict_xgboost_risk
 
 router = APIRouter(prefix="/api/predict", tags=["Predictions"])
 
@@ -30,15 +35,15 @@ JUNCTION_NAMES = {
 }
 
 HOUR_PATTERNS = {
-    0:20,1:12,2:8,3:6,4:8,5:25,6:80,7:180,8:320,9:350,10:250,11:200,
-    12:220,13:210,14:190,15:200,16:280,17:380,18:400,19:350,20:250,21:180,22:100,23:50,
+    0:20, 1:12, 2:8, 3:6, 4:8, 5:25, 6:80, 7:180, 8:320, 9:350, 10:250, 11:200,
+    12:220, 13:210, 14:190, 15:200, 16:280, 17:380, 18:400, 19:350, 20:250, 21:180, 22:100, 23:50,
 }
 
-def _predict_count(jid, hour):
+def _predict_count(jid: int, hour: int) -> int:
     base = HOUR_PATTERNS.get(hour, 100)
-    return int(base * (1.0 + (jid % 3) * 0.2) * random.uniform(0.85, 1.15))
+    return int(base * (1.0 + (jid % 3) * 0.2))
 
-def _level(count):
+def _level(count: int) -> str:
     if count > 350: return "critical"
     if count > 250: return "high"
     if count > 150: return "medium"
@@ -51,14 +56,15 @@ async def predict_traffic(data: TrafficPredictionRequest, current_user=Depends(g
     for i in range(data.hours_ahead):
         h = (now.hour + i) % 24
         c = _predict_count(data.junction_id, h)
-        preds.append({"hour": h, "timestamp": (now + timedelta(hours=i)).isoformat(),
-                       "predicted_vehicle_count": c, "congestion_level": _level(c),
-                       "confidence": round(random.uniform(0.78, 0.95), 2)})
+        preds.append({
+            "hour": h,
+            "timestamp": (now + timedelta(hours=i)).isoformat(),
+            "predicted_vehicle_count": c,
+            "congestion_level": _level(c),
+            "confidence": 0.85,
+            "prediction_source": "hour_pattern_baseline",
+        })
     return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
-
-from sqlalchemy.orm import Session
-from ..database import get_db
-from ..models.accident import AccidentData
 
 @router.post("/risk", response_model=RiskPredictionResponse)
 async def predict_risk(
@@ -66,13 +72,15 @@ async def predict_risk(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    max_risk = 10.0
-    for hs in ACCIDENT_HOTSPOTS:
-        dist = math.sqrt((data.latitude - hs["lat"])**2 + (data.longitude - hs["lng"])**2)
-        if dist < 0.02:
-            max_risk = max(max_risk, hs["base_risk"] * (1 - dist / 0.02))
+    # ── 1. Real XGBoost Model Inference ──────────────────────────────────────
+    weather_val = (data.weather or "Clear").capitalize()
+    xgb_result = predict_xgboost_risk(
+        latitude=data.latitude,
+        longitude=data.longitude,
+        weather=weather_val,
+    )
 
-    # Query DB accident density around location (within ~2km box)
+    # ── 2. Empirical Database Historical Accident Density ─────────────────────
     db_accidents = (
         db.query(AccidentData.severity)
         .filter(
@@ -87,49 +95,95 @@ async def predict_risk(
     if db_accidents:
         cnt = len(db_accidents)
         fatals = sum(1 for a in db_accidents if a.severity == "Fatal")
-        db_risk_boost = min(60.0, cnt * 0.8 + fatals * 2.5)
+        db_risk_boost = min(40.0, cnt * 0.6 + fatals * 2.0)
 
-    max_risk = max(max_risk, 10.0 + db_risk_boost)
+    # Proximity to major known hotspots
+    hotspot_risk = 10.0
+    for hs in ACCIDENT_HOTSPOTS:
+        dist = math.sqrt((data.latitude - hs["lat"])**2 + (data.longitude - hs["lng"])**2)
+        if dist < 0.02:
+            hotspot_risk = max(hotspot_risk, hs["base_risk"] * (1 - dist / 0.02))
 
+    # Blend XGBoost ML Prediction with DB Density & Hotspot Proximity
+    if xgb_result.get("model_loaded") and xgb_result.get("predicted_risk_score") is not None:
+        xgb_score = float(xgb_result["predicted_risk_score"])
+        combined_risk = (xgb_score * 0.55) + (db_risk_boost * 0.30) + (hotspot_risk * 0.15)
+    else:
+        combined_risk = max(hotspot_risk, 10.0 + db_risk_boost)
+
+    # Contextual multipliers (deterministic, zero random noise)
     hour = data.hour if data.hour is not None else datetime.now().hour
-    if hour in [22,23,0,1,2,3,4,5]: max_risk *= 1.3
-    elif hour in [8,9,17,18,19]: max_risk *= 1.15
-    weather_mult = {"clear":1.0,"cloudy":1.05,"rain":1.4,"heavy_rain":1.7,"fog":1.5,"storm":1.8}
-    max_risk *= weather_mult.get(data.weather, 1.0)
-    risk_score = min(100, max(0, max_risk + random.uniform(-3, 3)))
+    if hour in [22, 23, 0, 1, 2, 3, 4, 5]:
+        combined_risk *= 1.25
+    elif hour in [8, 9, 17, 18, 19]:
+        combined_risk *= 1.10
+
+    weather_key = (data.weather or "clear").lower()
+    weather_mult = {"clear": 1.0, "cloudy": 1.05, "rain": 1.35, "heavy_rain": 1.6, "fog": 1.45, "storm": 1.7}
+    combined_risk *= weather_mult.get(weather_key, 1.0)
+
+    risk_score = round(min(100.0, max(0.0, combined_risk)), 1)
+
     if risk_score >= 75: rl = "critical"
     elif risk_score >= 50: rl = "high"
     elif risk_score >= 25: rl = "medium"
     else: rl = "low"
+
     factors = []
+    if xgb_result.get("model_loaded") and xgb_result.get("predicted_severity"):
+        factors.append(f"XGBoost Classifier predicted severity: {xgb_result['predicted_severity']}")
     if db_accidents and len(db_accidents) >= 5:
-        factors.append(f"High historical accident area ({len(db_accidents)} recorded incidents nearby)")
+        factors.append(f"High historical accident density ({len(db_accidents)} recorded incidents nearby)")
     elif risk_score > 50:
         factors.append("Proximity to accident-prone zone")
-    if hour in [22,23,0,1,2,3]: factors.append("Low visibility (nighttime)")
-    if data.weather in ["rain","heavy_rain"]: factors.append("Wet road conditions")
-    if hour in [8,9,17,18,19]: factors.append("High traffic density (rush hour)")
+    if hour in [22, 23, 0, 1, 2, 3]: factors.append("Low visibility (nighttime)")
+    if weather_key in ["rain", "heavy_rain"]: factors.append("Wet road conditions")
+    if hour in [8, 9, 17, 18, 19]: factors.append("High traffic density (rush hour)")
     if not factors: factors.append("Generally safe conditions")
-    return RiskPredictionResponse(latitude=data.latitude, longitude=data.longitude,
-        risk_score=round(risk_score, 1), risk_level=rl, factors=factors)
 
+    return RiskPredictionResponse(
+        latitude=data.latitude,
+        longitude=data.longitude,
+        risk_score=risk_score,
+        risk_level=rl,
+        factors=factors,
+    )
 
 @router.get("/congestion-forecast")
 async def get_congestion_forecast(current_user=Depends(get_current_user)):
     forecasts = []
     for jid, name in JUNCTION_NAMES.items():
-        jf = [{"hour": h, "vehicle_count": _predict_count(jid, h),
-               "congestion_level": _level(_predict_count(jid, h))} for h in range(24)]
+        jf = [
+            {
+                "hour": h,
+                "vehicle_count": _predict_count(jid, h),
+                "congestion_level": _level(_predict_count(jid, h)),
+            }
+            for h in range(24)
+        ]
         forecasts.append({"junction_id": jid, "junction_name": name, "forecasts": jf})
     return forecasts
 
 @router.get("/accident-heatmap")
-async def get_accident_heatmap(current_user=Depends(get_current_user)):
+async def get_accident_heatmap(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Returns genuine historical accident points from SQLite database for heatmap rendering."""
+    records = (
+        db.query(AccidentData.latitude, AccidentData.longitude, AccidentData.severity)
+        .filter(AccidentData.latitude.isnot(None), AccidentData.longitude.isnot(None))
+        .limit(500)
+        .all()
+    )
+    sev_weights = {"Fatal": 1.0, "Grievous Injury": 0.8, "Simple Injury": 0.5, "Damage Only": 0.3}
     points = []
-    for hs in ACCIDENT_HOTSPOTS:
-        for _ in range(random.randint(8, 20)):
-            points.append({"lat": hs["lat"] + random.uniform(-0.006, 0.006),
-                "lng": hs["lng"] + random.uniform(-0.006, 0.006),
-                "intensity": round(hs["base_risk"] / 100 * random.uniform(0.7, 1.0), 3),
-                "severity": random.randint(1, 5)})
+    for r in records:
+        points.append({
+            "lat": r.latitude,
+            "lng": r.longitude,
+            "intensity": round(sev_weights.get(r.severity, 0.5), 2),
+            "severity": r.severity or "Unknown",
+        })
     return points
+

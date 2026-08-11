@@ -1,19 +1,19 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { HiMail, HiLockClosed, HiShieldCheck, HiArrowRight, HiArrowLeft, HiRefresh } from 'react-icons/hi';
+import { HiMail, HiLockClosed, HiShieldCheck, HiArrowRight, HiArrowLeft, HiRefresh, HiCheckCircle } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
-export default function Register() {
-  const { sendSignupOTP, verifySignupOTP, setPin } = useAuth();
+export default function ForgotPin() {
+  const { forgotPinSendOTP, forgotPinVerifyOTP, resetPin } = useAuth();
   const navigate = useNavigate();
 
-  // Step 1: Email, Step 2: OTP verification, Step 3: Set PIN
+  // Step 1: Enter Email, Step 2: Verify OTP, Step 3: Set New PIN, Step 4: Success
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [verificationToken, setVerificationToken] = useState('');
-  const [pin, setPinValue] = useState('');
+  const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -37,8 +37,8 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await sendSignupOTP(email);
-      toast.success('Verification code sent to your email!');
+      const res = await forgotPinSendOTP(email);
+      toast.success(res.message || 'Verification code sent!');
       setStep(2);
       setCooldown(60);
     } catch (err) {
@@ -53,7 +53,7 @@ export default function Register() {
     if (cooldown > 0) return;
     setLoading(true);
     try {
-      await sendSignupOTP(email);
+      await forgotPinSendOTP(email);
       toast.success('New verification code sent!');
       setCooldown(60);
     } catch (err) {
@@ -72,9 +72,9 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      const res = await verifySignupOTP(email, otp);
+      const res = await forgotPinVerifyOTP(email, otp);
       setVerificationToken(res.verification_token);
-      toast.success('Email verified successfully!');
+      toast.success('Code verified successfully!');
       setStep(3);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Invalid or expired verification code');
@@ -83,24 +83,24 @@ export default function Register() {
     }
   };
 
-  // Step 3: Create PIN & complete registration
-  const handleCreatePIN = async (e) => {
+  // Step 3: Reset PIN
+  const handleResetPIN = async (e) => {
     e.preventDefault();
-    if (pin.length < 4 || pin.length > 6) {
+    if (newPin.length < 4 || newPin.length > 6) {
       toast.error('PIN must be 4 to 6 digits');
       return;
     }
-    if (pin !== confirmPin) {
+    if (newPin !== confirmPin) {
       toast.error('PINs do not match');
       return;
     }
     setLoading(true);
     try {
-      await setPin(email, verificationToken, pin, confirmPin);
-      toast.success('Account created successfully!');
-      navigate('/dashboard');
+      const res = await resetPin(email, verificationToken, newPin, confirmPin);
+      toast.success(res.message || 'PIN updated successfully!');
+      setStep(4);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to create PIN');
+      toast.error(err.response?.data?.detail || 'Failed to reset PIN');
     } finally {
       setLoading(false);
     }
@@ -112,38 +112,40 @@ export default function Register() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-surface-100 tracking-tight">NAVISCAPE</h1>
-          <p className="text-surface-400 mt-2">Create your account</p>
+          <p className="text-surface-400 mt-2">Reset your security PIN</p>
         </div>
 
         {/* Step indicator */}
-        <div className="flex items-center justify-between mb-6 px-4">
-          {[
-            { num: 1, label: 'Email' },
-            { num: 2, label: 'Verify Code' },
-            { num: 3, label: 'Set PIN' },
-          ].map((s) => (
-            <div key={s.num} className="flex items-center gap-2">
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs transition-all ${
-                  step === s.num
-                    ? 'bg-primary-500 text-white ring-4 ring-primary-500/20'
-                    : step > s.num
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-                    : 'bg-surface-800 text-surface-500 border border-surface-700'
-                }`}
-              >
-                {step > s.num ? '✓' : s.num}
+        {step <= 3 && (
+          <div className="flex items-center justify-between mb-6 px-4">
+            {[
+              { num: 1, label: 'Email' },
+              { num: 2, label: 'Verify Code' },
+              { num: 3, label: 'New PIN' },
+            ].map((s) => (
+              <div key={s.num} className="flex items-center gap-2">
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs transition-all ${
+                    step === s.num
+                      ? 'bg-primary-500 text-white ring-4 ring-primary-500/20'
+                      : step > s.num
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                      : 'bg-surface-800 text-surface-500 border border-surface-700'
+                  }`}
+                >
+                  {step > s.num ? '✓' : s.num}
+                </div>
+                <span
+                  className={`text-xs font-medium ${
+                    step === s.num ? 'text-surface-200' : 'text-surface-500'
+                  }`}
+                >
+                  {s.label}
+                </span>
               </div>
-              <span
-                className={`text-xs font-medium ${
-                  step === s.num ? 'text-surface-200' : 'text-surface-500'
-                }`}
-              >
-                {s.label}
-              </span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Form Card */}
         <div className="glass-card p-8">
@@ -166,7 +168,7 @@ export default function Register() {
                   />
                 </div>
                 <p className="text-xs text-surface-500 mt-1">
-                  We will send a 6-digit verification code to this email.
+                  If an account exists, a 6-digit verification code will be sent.
                 </p>
               </div>
 
@@ -179,7 +181,7 @@ export default function Register() {
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (
                   <>
-                    <span>Send Verification Code</span>
+                    <span>Send Reset Code</span>
                     <HiArrowRight className="w-5 h-5" />
                   </>
                 )}
@@ -250,12 +252,12 @@ export default function Register() {
             </form>
           )}
 
-          {/* STEP 3: Create Security PIN */}
+          {/* STEP 3: Create New PIN */}
           {step === 3 && (
-            <form onSubmit={handleCreatePIN} className="space-y-4">
+            <form onSubmit={handleResetPIN} className="space-y-4">
               <div>
                 <label className="text-sm font-medium text-surface-300 mb-1.5 block">
-                  Create Security PIN (4–6 digits)
+                  New Security PIN (4–6 digits)
                 </label>
                 <div className="relative">
                   <HiLockClosed className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-400 w-5 h-5" />
@@ -264,8 +266,8 @@ export default function Register() {
                     maxLength={6}
                     className="input-field pl-12 tracking-widest text-lg font-mono"
                     placeholder="••••••"
-                    value={pin}
-                    onChange={(e) => setPinValue(e.target.value.replace(/\D/g, ''))}
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
                     required
                   />
                 </div>
@@ -273,7 +275,7 @@ export default function Register() {
 
               <div>
                 <label className="text-sm font-medium text-surface-300 mb-1.5 block">
-                  Confirm Security PIN
+                  Confirm New Security PIN
                 </label>
                 <div className="relative">
                   <HiLockClosed className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-400 w-5 h-5" />
@@ -298,7 +300,7 @@ export default function Register() {
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (
                   <>
-                    <span>Complete Sign Up</span>
+                    <span>Reset Security PIN</span>
                     <HiArrowRight className="w-5 h-5" />
                   </>
                 )}
@@ -306,12 +308,33 @@ export default function Register() {
             </form>
           )}
 
-          <div className="mt-6 text-center text-sm text-surface-400 border-t border-surface-700/40 pt-5">
-            Already have an account?{' '}
-            <Link to="/login" className="text-primary-400 hover:text-primary-300 font-medium">
-              Sign in
-            </Link>
-          </div>
+          {/* STEP 4: Success */}
+          {step === 4 && (
+            <div className="text-center py-4 space-y-4">
+              <div className="w-16 h-16 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center mx-auto border border-green-500/30">
+                <HiCheckCircle className="w-10 h-10" />
+              </div>
+              <h3 className="text-xl font-bold text-surface-100">PIN Reset Successful</h3>
+              <p className="text-sm text-surface-400">
+                Your security PIN has been updated. You can now log in using your new PIN.
+              </p>
+              <button
+                onClick={() => navigate('/login')}
+                className="btn-primary w-full py-3 mt-4 text-base font-semibold"
+              >
+                Go to Sign In
+              </button>
+            </div>
+          )}
+
+          {step < 4 && (
+            <div className="mt-6 text-center text-sm text-surface-400 border-t border-surface-700/40 pt-5">
+              Remember your PIN?{' '}
+              <Link to="/login" className="text-primary-400 hover:text-primary-300 font-medium">
+                Sign in
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </div>

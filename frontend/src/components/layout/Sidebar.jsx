@@ -1,11 +1,11 @@
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import {
-  HiHome, HiMap, HiChartBar, HiShieldCheck,
-  HiMenu, HiX, HiSun, HiMoon, HiUserCircle, HiInformationCircle
+  HiHome, HiMap, HiChartBar, HiInformationCircle,
+  HiMenu, HiX, HiSun, HiMoon, HiUserCircle, HiLogout
 } from 'react-icons/hi';
-import { useState } from 'react';
 
 const navItems = [
   { to: '/dashboard', icon: HiHome, label: 'Dashboard' },
@@ -14,17 +14,13 @@ const navItems = [
   { to: '/about', icon: HiInformationCircle, label: 'About' },
 ];
 
-const adminItems = [
-  { to: '/admin', icon: HiShieldCheck, label: 'Admin Panel' },
-];
-
 export default function Sidebar() {
-  const { user, isAdmin } = useAuth();
+  const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const linkClass = ({ isActive }) => isActive ? 'nav-link-active' : 'nav-link';
+  const linkClass = ({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link');
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -39,25 +35,15 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <p className={`text-xs font-medium text-surface-500 uppercase tracking-wider px-4 mb-2 ${collapsed ? 'hidden' : ''}`}>Menu</p>
-        {navItems.map(item => (
+        <p className={`text-xs font-medium text-surface-500 uppercase tracking-wider px-4 mb-2 ${collapsed ? 'hidden' : ''}`}>
+          Menu
+        </p>
+        {navItems.map((item) => (
           <NavLink key={item.to} to={item.to} className={linkClass} onClick={() => setMobileOpen(false)}>
             <item.icon className="w-5 h-5 flex-shrink-0" />
             {!collapsed && <span>{item.label}</span>}
           </NavLink>
         ))}
-
-        {isAdmin && (
-          <>
-            <p className={`text-xs font-medium text-surface-500 uppercase tracking-wider px-4 mt-6 mb-2 ${collapsed ? 'hidden' : ''}`}>Admin</p>
-            {adminItems.map(item => (
-              <NavLink key={item.to} to={item.to} className={linkClass} onClick={() => setMobileOpen(false)}>
-                <item.icon className="w-5 h-5 flex-shrink-0" />
-                {!collapsed && <span>{item.label}</span>}
-              </NavLink>
-            ))}
-          </>
-        )}
       </nav>
 
       {/* Bottom section */}
@@ -66,15 +52,28 @@ export default function Sidebar() {
           {isDark ? <HiSun className="w-5 h-5" /> : <HiMoon className="w-5 h-5" />}
           {!collapsed && <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
-        <div className="nav-link cursor-default">
-          <HiUserCircle className="w-5 h-5 text-surface-400" />
-          {!collapsed && (
-            <div className="overflow-hidden">
-              <p className="text-sm font-medium text-surface-200 truncate">{user?.full_name || user?.username}</p>
-              <p className="text-xs text-surface-500 truncate">{user?.email}</p>
-            </div>
-          )}
+
+        <div className="nav-link cursor-default justify-between">
+          <div className="flex items-center gap-2 overflow-hidden">
+            <HiUserCircle className="w-5 h-5 text-surface-400 flex-shrink-0" />
+            {!collapsed && (
+              <div className="overflow-hidden">
+                <p className="text-xs font-medium text-surface-200 truncate">{user?.email}</p>
+                <p className="text-[10px] text-surface-500">Verified User</p>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Real Logout Button */}
+        <button
+          onClick={logout}
+          className="nav-link w-full text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+          title="Sign out"
+        >
+          <HiLogout className="w-5 h-5 flex-shrink-0" />
+          {!collapsed && <span>Sign Out</span>}
+        </button>
       </div>
     </div>
   );
@@ -95,11 +94,13 @@ export default function Sidebar() {
       )}
 
       {/* Sidebar */}
-      <aside className={`
+      <aside
+        className={`
         fixed top-0 left-0 h-full z-40 glass-card border-r border-surface-700/40 transition-all duration-300
         ${collapsed ? 'w-20' : 'w-64'}
         ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-      `}>
+      `}
+      >
         {/* Collapse toggle (desktop) */}
         <button
           onClick={() => setCollapsed(!collapsed)}
