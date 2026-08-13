@@ -27,8 +27,8 @@ export default function Home() {
             and graph algorithms. Final year BE AI & Data Science project.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link to="/dashboard" className="btn-primary text-lg px-8 py-4">
-              Open Dashboard
+            <Link to="/navigate" className="btn-primary text-lg px-8 py-4">
+              Launch Navigation
             </Link>
             <Link to="/about" className="btn-secondary text-lg px-8 py-4">About the Project</Link>
           </div>

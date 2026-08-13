@@ -134,8 +134,11 @@ def optimize_candidate_routes(
         live_hazards_list = safety_res.get("live_hazards", [])
         hazard_delay = float(safety_res.get("live_hazard_delay_minutes", 0.0))
 
-        # Update expected delay and ETA to include both traffic and live hazard delays
-        traffic_delay = expected_delay_minutes or 0.0
+        # Update expected delay and ETA to include both traffic and live hazard delays.
+        # Keep traffic_delay and hazard_delay as separate named fields so the frontend
+        # can display them individually without any risk of double-counting.
+        traffic_delay = round(expected_delay_minutes or 0.0, 1)
+        hazard_delay = round(hazard_delay, 1)
         total_delay = round(traffic_delay + hazard_delay, 1)
         eta_minutes = round(duration_min + total_delay, 1)
 
@@ -147,7 +150,12 @@ def optimize_candidate_routes(
             "route_type": route_type,
             "distance_km": distance_km,
             "duration_min": duration_min,
+            # ETA = base duration + traffic delay + hazard delay (authoritative, no frontend re-calc)
             "eta_minutes": eta_minutes,
+            # Split delay components — frontend MUST display these directly, never re-add them
+            "traffic_delay_minutes": traffic_delay,
+            "hazard_delay_minutes": hazard_delay,
+            "expected_delay_minutes": total_delay,  # Combined total; kept for backwards compat
             "waypoints": waypoints,
             "safety_score": safety_score,
             "accident_risk_score": accident_risk_score,
@@ -162,7 +170,6 @@ def optimize_candidate_routes(
             "predicted_traffic_score": predicted_traffic_score,
             "traffic_level": traffic_level,
             "predicted_congestion": predicted_congestion,
-            "expected_delay_minutes": total_delay,  # Return combined delays
             "traffic_source": traffic_source,
             "traffic_confidence": traffic_confidence,
             "prediction_available": prediction_available,
@@ -177,7 +184,7 @@ def optimize_candidate_routes(
     max_traffic = max(item["traffic_score"] for item in evaluated_list)
 
     for item in evaluated_list:
-        dur = item["duration_min"] if item["duration_min"] > 0 else min_duration
+        dur = item["eta_minutes"] if item["eta_minutes"] > 0 else min_duration
         dist = item["distance_km"] if item["distance_km"] > 0 else min_distance
 
         # Relative ETA score: 100 for fastest, proportional reduction for slower
@@ -211,7 +218,7 @@ def optimize_candidate_routes(
     # Step 3: Select Recommended Route (Highest Overall Score)
     sorted_evals = sorted(
         evaluated_list,
-        key=lambda x: (x["overall_score"], x["safety_score"], -x["duration_min"]),
+        key=lambda x: (x["overall_score"], x["safety_score"], -x["eta_minutes"]),
         reverse=True,
     )
     recommended = sorted_evals[0]

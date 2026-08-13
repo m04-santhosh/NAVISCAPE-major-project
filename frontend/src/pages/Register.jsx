@@ -98,7 +98,7 @@ export default function Register() {
     try {
       await setPin(email, verificationToken, pin, confirmPin);
       toast.success('Account created successfully!');
-      navigate('/dashboard');
+      navigate('/navigate');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to create PIN');
     } finally {

@@ -3,8 +3,12 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker,
 import L from 'leaflet';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiClock, HiPlay, HiStop, HiArrowRight, HiArrowUp, HiArrowLeft, HiOutlineLocationMarker, HiPaperAirplane } from 'react-icons/hi';
+import {
+  HiLocationMarker, HiSwitchHorizontal, HiSearch, HiShieldCheck, HiPlay, HiStop,
+  HiArrowUp, HiArrowRight, HiArrowLeft, HiOutlineLocationMarker, HiPaperAirplane
+} from 'react-icons/hi';
 import { useAuth } from '../context/AuthContext';
+import NavbarControls from '../components/layout/NavbarControls';
 import 'leaflet/dist/leaflet.css';
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -30,7 +34,7 @@ const PRESET_LOCATIONS = [
 const ROUTE_COLORS = { shortest: '#ef4444', safest: '#22c55e', balanced: '#06b6d4' };
 const ROUTE_LABELS = { shortest: 'Fastest Route', safest: 'Safest Route', balanced: 'Balanced Route' };
 
-// Phase 5: Traffic level → color
+// Traffic level helpers
 const TRAFFIC_COLOR = { Low: 'text-green-400', Moderate: 'text-yellow-400', High: 'text-orange-400', Severe: 'text-red-400' };
 const TRAFFIC_BG = { Low: 'bg-green-500/15', Moderate: 'bg-yellow-500/15', High: 'bg-orange-500/15', Severe: 'bg-red-500/15' };
 const TRAFFIC_ICON = { Low: '🟢', Moderate: '🟡', High: '🟠', Severe: '🔴' };
@@ -45,25 +49,20 @@ async function fetchOSRMRoutes(srcLat, srcLng, dstLat, dstLng) {
   return data.routes;
 }
 
-/* ---- Convert OSRM route to our internal format ---- */
+/* ---- Convert OSRM route to internal candidate format ---- */
 function processOSRMRoutes(osrmRoutes) {
-  // Sort by distance: shortest first, longest last
   const sorted = [...osrmRoutes].sort((a, b) => a.distance - b.distance);
-
   const typeLabels = ['shortest', 'balanced', 'safest'];
   return sorted.map((route, i) => {
     const type = typeLabels[Math.min(i, typeLabels.length - 1)];
-    // OSRM gives [lng, lat] — flip to [lat, lng] for Leaflet
     const waypoints = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
     const distanceKm = +(route.distance / 1000).toFixed(2);
     const durationMin = +(route.duration / 60).toFixed(1);
 
-    // Safety score: shortest routes score lower (more direct = potentially riskier),
-    // longer detour routes score higher (presumably avoiding risky areas)
     let safetyScore;
-    if (i === 0) safetyScore = +(55 + Math.random() * 15).toFixed(1);        // shortest: 55-70
-    else if (i === sorted.length - 1) safetyScore = +(82 + Math.random() * 16).toFixed(1); // safest: 82-98
-    else safetyScore = +(68 + Math.random() * 18).toFixed(1);                // balanced: 68-86
+    if (i === 0) safetyScore = +(55 + Math.random() * 15).toFixed(1);
+    else if (i === sorted.length - 1) safetyScore = +(82 + Math.random() * 16).toFixed(1);
+    else safetyScore = +(68 + Math.random() * 18).toFixed(1);
 
     return {
       route_type: type,
@@ -111,20 +110,20 @@ function turnDirection(prev, cur, next) {
   return { icon: HiArrowLeft, text: 'Turn left' };
 }
 
-/* ---- map sub-component: follow the moving marker ---- */
+/* ---- map sub-component: follow moving marker ---- */
 function FollowMarker({ position, isNavigating }) {
   const map = useMap();
   useEffect(() => {
     if (isNavigating && position) {
       map.setView(position, Math.max(map.getZoom(), 15), { animate: true, duration: 0.4 });
     }
-  }, [position, isNavigating]);
+  }, [position, isNavigating, map]);
   return null;
 }
 
 function FitBounds({ bounds }) {
   const map = useMap();
-  useEffect(() => { if (bounds) map.fitBounds(bounds, { padding: [50, 50] }); }, [bounds]);
+  useEffect(() => { if (bounds) map.fitBounds(bounds, { padding: [50, 50] }); }, [bounds, map]);
   return null;
 }
 
@@ -139,13 +138,13 @@ function MapClickHandler({ onMapClick, active }) {
   return null;
 }
 
-/* ---- get custom icon for hazard type and severity ---- */
+/* ---- hazard custom icons ---- */
 const getHazardIcon = (type, severity) => {
   const colors = {
-    Low: '#10b981',      // Emerald Green
-    Medium: '#eab308',   // Yellow/Gold
-    High: '#f97316',     // Orange
-    Critical: '#ef4444', // Red
+    Low: '#10b981',
+    Medium: '#eab308',
+    High: '#f97316',
+    Critical: '#ef4444',
   };
   const color = colors[severity] || '#3b82f6';
   const animatePulse = severity === 'Critical' ? 'animate-pulse' : '';
@@ -175,9 +174,7 @@ const getHazardIcon = (type, severity) => {
     className: '',
     html: `
       <div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center;">
-        <!-- Pulsing glow -->
         <div class="${animatePulse}" style="position:absolute;width:28px;height:28px;border-radius:50%;background:${color};opacity:0.25;transform:scale(1);"></div>
-        <!-- Circle marker -->
         <div style="position:absolute;width:22px;height:22px;border-radius:50%;border:2px solid ${color};background:#0f172a;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5);display:flex;align-items:center;justify-content:center;color:${color}">
           ${iconSvg}
         </div>
@@ -189,7 +186,7 @@ const getHazardIcon = (type, severity) => {
   });
 };
 
-/* ---- navigation car icon (SVG arrow) ---- */
+/* ---- navigation car icon ---- */
 const carIconHtml = (rot) => L.divIcon({
   className: '',
   html: `<div style="transform:rotate(${rot}deg);width:36px;height:36px;display:flex;align-items:center;justify-content:center">
@@ -199,7 +196,6 @@ const carIconHtml = (rot) => L.divIcon({
   iconAnchor: [18, 18],
 });
 
-/* ================================================================ */
 export default function Navigation() {
   const { user } = useAuth();
   const [hazards, setHazards] = useState([]);
@@ -248,13 +244,83 @@ export default function Navigation() {
   const simIntervalRef = useRef(null);
   const [activeHotspotWarning, setActiveHotspotWarning] = useState(null);
 
+  // Web Audio API context reference for accident warning chime
+  const audioCtxRef = useRef(null);
+
+  /* ---------- WEB AUDIO API ALERTS ---------- */
+  const initAudioContext = useCallback(() => {
+    try {
+      if (!audioCtxRef.current) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtxRef.current = new AudioContextClass();
+        }
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+    } catch (e) {
+      console.warn("AudioContext init error:", e);
+    }
+  }, []);
+
+  const playAccidentWarningChime = useCallback(() => {
+    try {
+      initAudioContext();
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      const now = ctx.currentTime;
+      
+      // Tone 1: High warning chime (880 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(880, now);
+      gain1.gain.setValueAtTime(0.35, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.45);
+
+      // Tone 2: Mid alert pitch (660 Hz)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(660, now + 0.3);
+      gain2.gain.setValueAtTime(0.4, now + 0.3);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.85);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.3);
+      osc2.stop(now + 0.85);
+
+      // Tone 3: Sustained warning chime (880 -> 587.33 Hz)
+      const osc3 = ctx.createOscillator();
+      const gain3 = ctx.createGain();
+      osc3.type = 'triangle';
+      osc3.frequency.setValueAtTime(880, now + 0.7);
+      osc3.frequency.exponentialRampToValueAtTime(587.33, now + 2.3);
+      gain3.gain.setValueAtTime(0.3, now + 0.7);
+      gain3.gain.exponentialRampToValueAtTime(0.001, now + 2.4);
+      osc3.connect(gain3);
+      gain3.connect(ctx.destination);
+      osc3.start(now + 0.7);
+      osc3.stop(now + 2.4);
+    } catch (err) {
+      console.warn("Accident warning chime error:", err);
+    }
+  }, [initAudioContext]);
+
   /* ---------- GEOCODING (Nominatim) ---------- */
   const geocodeSearch = async (query, setSuggestions) => {
     if (!query || query.length < 2) { setSuggestions([]); return; }
-    // First check preset locations
     const presetMatches = PRESET_LOCATIONS.filter(l => l.name.toLowerCase().includes(query.toLowerCase()));
     
-    // Search Nominatim for locations in India, biased/restricted towards Karnataka
     try {
       const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=10&countrycodes=in&viewbox=74.05,18.45,78.50,11.55&bounded=0&addressdetails=1`;
       const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
@@ -267,7 +333,6 @@ export default function Navigation() {
         const state = addr.state || '';
         const parts = [main, city, state].filter(Boolean);
         
-        // Remove duplicate/redundant adjacent text elements
         const uniqueParts = [];
         parts.forEach(p => {
           const trimmed = p.trim();
@@ -283,7 +348,6 @@ export default function Navigation() {
         };
       });
 
-      // Merge presets first, then geocoded results
       const presetNames = new Set(presetMatches.map(p => p.name.toLowerCase()));
       const merged = [
         ...presetMatches.map(l => ({ name: l.name, lat: l.lat, lng: l.lng })),
@@ -291,7 +355,6 @@ export default function Navigation() {
       ];
       setSuggestions(merged.slice(0, 8));
     } catch {
-      // Fallback to presets if geocoder fails
       setSuggestions(presetMatches.map(l => ({ name: l.name, lat: l.lat, lng: l.lng })));
     }
   };
@@ -316,16 +379,14 @@ export default function Navigation() {
   const selectDest = (loc) => { setDest(loc.name); setDestCoord([loc.lat, loc.lng]); setShowDestDD(false); setDestSuggestions([]); };
   const swapLocations = () => { setSource(dest); setDest(source); setSourceCoord(destCoord); setDestCoord(sourceCoord); };
 
-  /* ---------- FIND & OPTIMIZE ROUTES via OSRM & SMART ROUTE ENGINE ---------- */
+  /* ---------- FIND & OPTIMIZE ROUTES ---------- */
   const findRoutes = async () => {
     if (!sourceCoord || !destCoord) { toast.error('Select both locations'); return; }
     setLoading(true);
     try {
-      // 1. Get real road routes from OSRM
       const osrmRoutes = await fetchOSRMRoutes(sourceCoord[0], sourceCoord[1], destCoord[0], destCoord[1]);
       const processed = processOSRMRoutes(osrmRoutes);
 
-      // 2. Send candidate routes to Phase 4 Smart Route Decision Engine API
       const candidatePayload = processed.map((r, i) => ({
         route_id: r.route_type || `route_${i}`,
         route_type: r.route_type || 'balanced',
@@ -354,7 +415,6 @@ export default function Navigation() {
         setSelectedRoute(recRoute);
       } catch (optErr) {
         console.warn('Smart route optimization API fallback:', optErr);
-        // Fallback to Phase 3 empirical safety evaluation
         const evaluated = await Promise.all(
           processed.map(async (r) => {
             try {
@@ -368,9 +428,10 @@ export default function Navigation() {
                 total_accidents_nearby: evalRes.data.total_accidents_nearby,
                 fatal_accidents_nearby: evalRes.data.fatal_accidents_nearby,
                 hotspots: evalRes.data.hotspots || [],
+                eta_minutes: r.duration_min,
               };
             } catch (e) {
-              return r;
+              return { ...r, eta_minutes: r.duration_min };
             }
           })
         );
@@ -379,7 +440,6 @@ export default function Navigation() {
         setSelectedRoute(evaluated[0]);
       }
 
-      // Get risk analysis from backend
       try {
         const riskRes = await api.post('/predict/risk', {
           latitude: (sourceCoord[0] + destCoord[0]) / 2,
@@ -395,9 +455,9 @@ export default function Navigation() {
         setRiskZones([]);
       }
 
-      // Fit map to all route points
       const allPts = processed.flatMap(r => r.waypoints);
       setBounds(L.latLngBounds(allPts));
+
       toast.success('Smart route optimization complete');
     } catch (err) {
       console.error('Route error:', err);
@@ -419,7 +479,7 @@ export default function Navigation() {
         dest_name: dest,
         route_type: route.route_type,
         distance_km: route.distance_km,
-        duration_min: route.duration_min,
+        duration_min: route.eta_minutes ?? route.duration_min,
         safety_score: route.safety_score,
       });
     } catch (err) {
@@ -489,7 +549,6 @@ export default function Navigation() {
     }
   };
 
-  /* ---------- INITIAL LOCALIZATION ---------- */
   useEffect(() => {
     locateUser();
     fetchHazards();
@@ -519,9 +578,11 @@ export default function Navigation() {
     if (selectedRoute?.waypoints?.length > 1) {
       const totalWp = selectedRoute.waypoints.length;
       const pct = (nearestIdx / (totalWp - 1)) * 100;
+      const baseEta = selectedRoute.eta_minutes ?? selectedRoute.duration_min;
+      
       setNavProgress(pct);
       setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
-      setNavETA(+(selectedRoute.duration_min * (1 - pct / 100)).toFixed(1));
+      setNavETA(+((baseEta) * (1 - pct / 100)).toFixed(1));
 
       if (nearestIdx < totalWp - 1) {
         const dir = turnDirection(
@@ -535,14 +596,15 @@ export default function Navigation() {
       if (pct > 95) setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
     }
 
-    // 500m Hotspot Proximity Alert Detection
+    // 500m Hotspot Proximity Alert Detection with Web Audio API chime
     if (selectedRoute?.hotspots?.length) {
       selectedRoute.hotspots.forEach((hs, idx) => {
         const hsKey = `${hs.lat}_${hs.lng}_${idx}`;
         if (!warnedHotspotsRef.current.has(hsKey)) {
           const distM = haversineMeters(currentPos[0], currentPos[1], hs.lat, hs.lng);
           if (distM <= 500) {
-            warnedHotspotsRef.current.add(hsKey);
+            warnedHotspotsRef.current.add(hsKey); // Mark as warned strictly once
+            playAccidentWarningChime();           // Play 2-3 sec Web Audio chime
             const warningText = `⚠️ Approaching Accident Hotspot: ${hs.name} (${hs.fatal_count} fatal incidents)`;
             toast.error(warningText, { duration: 6000, id: `hs-toast-${hsKey}` });
             setActiveHotspotWarning({
@@ -570,13 +632,16 @@ export default function Navigation() {
         }
       });
     }
-  }, [selectedRoute]);
+  }, [selectedRoute, playAccidentWarningChime]);
 
   const startNavigation = () => {
     if (!selectedRoute) { toast.error('Select a route first'); return; }
 
     const initialPos = sourceCoord || (selectedRoute.waypoints && selectedRoute.waypoints[0]);
     if (!initialPos) { toast.error('Route coordinates missing'); return; }
+
+    // Unlock Web Audio API on user interaction
+    initAudioContext();
 
     setIsNavigating(true);
     setTravelledPath([initialPos]);
@@ -590,7 +655,6 @@ export default function Navigation() {
     const waypoints = selectedRoute.waypoints || [];
     if (waypoints.length > 1) {
       let stepIdx = 0;
-      // Step interval to smoothly iterate through waypoints during simulation
       const stepInterval = Math.max(1, Math.floor(waypoints.length / 30));
 
       if (simIntervalRef.current) clearInterval(simIntervalRef.current);
@@ -633,47 +697,57 @@ export default function Navigation() {
 
   const srcIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });
   const dstIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });
+
+  /* ---- RENDER ROUTE PLANNER SEARCH CARD ---- */
   const renderPlannerContent = () => (
     routes.length > 0 ? (
       <div className="flex items-center justify-between gap-3 text-sm">
         <div className="truncate flex-1">
-          <div className="text-[10px] uppercase tracking-wider text-surface-400">Selected Route</div>
-          <div className="font-semibold text-surface-100 truncate">
+          <div className="text-[10px] uppercase tracking-wider text-cyan-400 font-bold">Selected Route</div>
+          <div className="font-semibold text-surface-100 truncate mt-0.5">
             {source} ➔ {dest}
           </div>
         </div>
         <button 
           onClick={() => { setRoutes([]); setSelectedRoute(null); }} 
-          className="text-xs text-primary-400 hover:text-primary-300 font-semibold flex-shrink-0 px-3 py-1.5 rounded-lg hover:bg-surface-800 transition-colors"
+          className="text-xs text-cyan-400 hover:text-cyan-300 font-bold flex-shrink-0 px-3 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-500/40 hover:bg-cyan-900/60 transition-all"
         >
           Change
         </button>
       </div>
     ) : (
       <>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-surface-200 flex items-center gap-2">
-            <HiLocationMarker className="text-primary-400" /> {isReporting ? 'Report Hazard' : 'Route Planner'}
-          </h2>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-black">
+              N
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-surface-100 tracking-tight">NAVISCAPE</h2>
+              <p className="text-[10px] text-surface-400">{isReporting ? 'Report Hazard' : 'Smart Route Planner'}</p>
+            </div>
+          </div>
+
           <button
             onClick={() => setIsReporting(prev => !prev)}
-            className={`text-xs px-2.5 py-1.5 rounded-lg border font-semibold transition-all duration-200 active:scale-95
+            className={`text-[11px] px-2.5 py-1.5 rounded-xl border font-bold transition-all duration-200 active:scale-95 flex items-center gap-1
               ${isReporting
-                ? 'bg-amber-600/20 border-amber-500/50 text-amber-300'
-                : 'bg-surface-800 border-surface-700 text-surface-300 hover:bg-surface-700'}`}
+                ? 'bg-amber-600/25 border-amber-500/60 text-amber-300'
+                : 'bg-surface-800/80 border-surface-700 text-surface-300 hover:bg-surface-700'}`}
           >
-            ⚠️ {isReporting ? 'Show Planner' : 'Report Hazard'}
+            ⚠️ {isReporting ? 'Planner' : 'Report Hazard'}
           </button>
         </div>
 
         {isReporting ? (
-          <form onSubmit={handleReportHazard} className="space-y-3 animate-fade-in">
+          <form onSubmit={handleReportHazard} className="space-y-2.5 animate-fade-in">
             <div>
-              <label className="text-xs font-medium text-surface-400 mb-1 block">Hazard Type</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Hazard Type</label>
               <select
                 value={reportType}
                 onChange={e => setReportType(e.target.value)}
-                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                className="input-field text-xs bg-surface-800/90 border-surface-700 text-surface-200 w-full rounded-xl p-2 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
               >
                 <option value="Accident">Accident</option>
                 <option value="Pothole">Pothole</option>
@@ -688,11 +762,11 @@ export default function Navigation() {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-surface-400 mb-1 block">Severity</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Severity</label>
               <select
                 value={reportSeverity}
                 onChange={e => setReportSeverity(e.target.value)}
-                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                className="input-field text-xs bg-surface-800/90 border-surface-700 text-surface-200 w-full rounded-xl p-2 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
               >
                 <option value="Low">Low</option>
                 <option value="Medium">Medium</option>
@@ -703,52 +777,52 @@ export default function Navigation() {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-xs font-medium text-surface-400 mb-1 block">Latitude</label>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Latitude</label>
                 <input
                   type="number"
                   step="any"
-                  placeholder="e.g. 12.9716"
+                  placeholder="12.9716"
                   value={reportLat}
                   onChange={e => setReportLat(e.target.value)}
-                  className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                  className="input-field text-xs bg-surface-800/90 border-surface-700 text-surface-200 w-full rounded-xl p-2 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
                   required
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-surface-400 mb-1 block">Longitude</label>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Longitude</label>
                 <input
                   type="number"
                   step="any"
-                  placeholder="e.g. 77.5946"
+                  placeholder="77.5946"
                   value={reportLng}
                   onChange={e => setReportLng(e.target.value)}
-                  className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                  className="input-field text-xs bg-surface-800/90 border-surface-700 text-surface-200 w-full rounded-xl p-2 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
                   required
                 />
               </div>
             </div>
 
-            <div className="text-[10px] text-amber-400 font-medium px-1 leading-snug">
-              💡 Tip: Click anywhere on the map to automatically pin coordinates.
+            <div className="text-[10px] text-amber-400 font-medium px-0.5 leading-snug">
+              💡 Tip: Click anywhere on the map to pin coordinates.
             </div>
 
             <div>
-              <label className="text-xs font-medium text-surface-400 mb-1 block">Description (Optional)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Description (Optional)</label>
               <textarea
-                placeholder="Describe the hazard details..."
+                placeholder="Describe details..."
                 value={reportDesc}
                 onChange={e => setReportDesc(e.target.value)}
-                className="input-field text-sm bg-surface-800 border-surface-700 text-surface-200 w-full rounded-lg p-2 h-16 resize-none focus:ring-1 focus:ring-primary-500 focus:outline-none"
+                className="input-field text-xs bg-surface-800/90 border-surface-700 text-surface-200 w-full rounded-xl p-2 h-14 resize-none focus:ring-1 focus:ring-cyan-500 focus:outline-none"
               />
             </div>
 
             <button
               type="submit"
               disabled={submittingHazard}
-              className="btn-primary w-full flex items-center justify-center gap-2 mt-2 bg-amber-600 hover:bg-amber-500 border-amber-500 hover:shadow-lg transition-all active:scale-95 duration-150"
+              className="btn-primary w-full flex items-center justify-center gap-2 mt-1 bg-amber-600 hover:bg-amber-500 border-amber-500 hover:shadow-lg transition-all active:scale-95 duration-150 py-2 text-xs font-bold"
             >
               {submittingHazard ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <span>Submit Report</span>
               )}
@@ -757,41 +831,46 @@ export default function Navigation() {
         ) : (
           <>
             {/* Source */}
-            <div className="relative mb-3">
-              <label className="text-xs font-medium text-surface-400 mb-1 block">Source</label>
-              <input className="input-field text-sm" placeholder="Search any location..." value={source}
+            <div className="relative mb-2">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Source</label>
+              <input className="input-field text-xs rounded-xl p-2.5" placeholder="Search source location..." value={source}
                 onChange={e => handleSourceChange(e.target.value)}
                 onFocus={() => { setShowSourceDD(true); if (source) geocodeSearch(source, setSourceSuggestions); }}
                 onBlur={() => setTimeout(() => setShowSourceDD(false), 200)} />
               {showSourceDD && sourceSuggestions.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
+                <div className="absolute z-50 w-full mt-1 glass-card bg-surface-900 border border-surface-700 rounded-xl shadow-2xl max-h-48 overflow-y-auto">
                   {sourceSuggestions.map((l,i) => (
-                    <button key={i} onMouseDown={() => selectSource(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
+                    <button key={i} onMouseDown={() => selectSource(l)} className="w-full text-left px-3 py-2 text-xs text-surface-300 hover:bg-surface-800 hover:text-white transition-colors truncate">{l.name}</button>
                   ))}
                 </div>
               )}
             </div>
-            <div className="flex justify-center my-1">
-              <button onClick={swapLocations} className="p-2 rounded-lg hover:bg-surface-700 transition-colors text-surface-400 hover:text-primary-400">
-                <HiSwitchHorizontal className="w-5 h-5 rotate-90" />
+
+            {/* Swap Button */}
+            <div className="flex justify-center -my-1 relative z-10">
+              <button onClick={swapLocations} title="Swap Locations" className="p-1.5 rounded-xl bg-surface-800/90 border border-surface-700 transition-colors text-surface-400 hover:text-cyan-400 hover:bg-surface-700 shadow">
+                <HiSwitchHorizontal className="w-4 h-4 rotate-90" />
               </button>
             </div>
-            <div className="relative mb-4">
-              <label className="text-xs font-medium text-surface-400 mb-1 block">Destination</label>
-              <input className="input-field text-sm" placeholder="Search any location..." value={dest}
+
+            {/* Destination */}
+            <div className="relative mb-3">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1 block">Destination</label>
+              <input className="input-field text-xs rounded-xl p-2.5" placeholder="Search destination location..." value={dest}
                 onChange={e => handleDestChange(e.target.value)}
                 onFocus={() => { setShowDestDD(true); if (dest) geocodeSearch(dest, setDestSuggestions); }}
                 onBlur={() => setTimeout(() => setShowDestDD(false), 200)} />
               {showDestDD && destSuggestions.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 glass-card max-h-48 overflow-y-auto">
+                <div className="absolute z-50 w-full mt-1 glass-card bg-surface-900 border border-surface-700 rounded-xl shadow-2xl max-h-48 overflow-y-auto">
                   {destSuggestions.map((l,i) => (
-                    <button key={i} onMouseDown={() => selectDest(l)} className="w-full text-left px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 transition-colors truncate">{l.name}</button>
+                    <button key={i} onMouseDown={() => selectDest(l)} className="w-full text-left px-3 py-2 text-xs text-surface-300 hover:bg-surface-800 hover:text-white transition-colors truncate">{l.name}</button>
                   ))}
                 </div>
               )}
             </div>
-            <button onClick={findRoutes} disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2">
-              {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><HiSearch className="w-5 h-5" /><span>Find Routes</span></>}
+
+            <button onClick={findRoutes} disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-xl shadow-lg">
+              {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><HiSearch className="w-4 h-4" /><span>Find Routes</span></>}
             </button>
           </>
         )}
@@ -799,85 +878,92 @@ export default function Navigation() {
     )
   );
 
-  // Helper: Recommended Route & Alternatives Content
+  /* ---- RENDER ROUTE ALTERNATIVES AND RECOMMENDED HERO CARD ---- */
   const renderAlternativesContent = () => {
     const recommendedRoute = routes.find(r => r.route_id === recommendedRouteId) || routes[0];
     const displayReasons = (recommendationReasons && recommendationReasons.length > 0)
       ? recommendationReasons
       : (recommendedRoute?.reasons || []);
 
+    const totalETA = recommendedRoute?.eta_minutes ?? recommendedRoute?.duration_min;
+
     return (
-      <>
+      <div className="space-y-3">
         {/* Recommended Route Hero Card */}
         {recommendedRoute && (
-          <div className="p-4 rounded-xl bg-gradient-to-br from-cyan-950/90 via-surface-900 to-surface-900 border border-cyan-500/50 shadow-xl mb-3 space-y-3">
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/90 via-surface-900 to-surface-900 border border-cyan-500/50 shadow-xl space-y-3">
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-cyan-400">
+              <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-cyan-400">
                 <HiShieldCheck className="w-4 h-4 text-cyan-400" />
                 NAVISCAPE RECOMMENDED
               </span>
-              <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
                 Overall {recommendedRoute.overall_score || 85}/100
               </span>
             </div>
 
-            <div className="flex items-baseline justify-between border-b border-surface-800 pb-2">
+            <div className="flex items-baseline justify-between border-b border-surface-800/80 pb-2">
               <div>
-                <span className="text-2xl font-bold text-surface-100">{recommendedRoute.duration_min?.toFixed(0)} min</span>
-                <span className="text-xs text-surface-400 ml-2">({recommendedRoute.distance_km} km)</span>
+                <span className="text-2xl font-black text-surface-100">{totalETA?.toFixed(0)} min</span>
+                <span className="text-xs text-surface-400 ml-2">
+                  ({recommendedRoute.distance_km} km • base {recommendedRoute.duration_min?.toFixed(0)}m)
+                </span>
               </div>
-              <span className="text-xs font-semibold text-surface-300">{recommendedRoute.label}</span>
+              <span className="text-xs font-bold text-surface-300">{recommendedRoute.label}</span>
             </div>
 
-            {/* Stats grid: Safety · Current Traffic · Predicted Congestion · Accident Risk */}
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
-              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
-                <div className="text-[10px] text-surface-400 uppercase">Safety Score</div>
-                <div className={`font-bold mt-0.5 ${recommendedRoute.safety_score >= 80 ? 'text-green-400' : recommendedRoute.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+            {/* Delay breakdown if traffic or hazard delay present */}
+            {(recommendedRoute.traffic_delay_minutes > 0 || recommendedRoute.hazard_delay_minutes > 0 || recommendedRoute.expected_delay_minutes > 0) && (
+              <div className="flex items-center justify-between text-xs px-2 py-1 bg-surface-800/60 rounded-xl border border-surface-700/50">
+                <span className="text-surface-400 font-medium text-[11px]">Backend Delays</span>
+                <div className="flex items-center gap-2 text-[11px] font-bold">
+                  {recommendedRoute.traffic_delay_minutes > 0 && (
+                    <span className="text-amber-400">Traffic: +{recommendedRoute.traffic_delay_minutes}m</span>
+                  )}
+                  {recommendedRoute.hazard_delay_minutes > 0 && (
+                    <span className="text-red-400">Hazard: +{recommendedRoute.hazard_delay_minutes}m</span>
+                  )}
+                  {recommendedRoute.traffic_delay_minutes === 0 && recommendedRoute.hazard_delay_minutes === 0 && (
+                    <span className="text-green-400">+0m delay</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Stats grid: Safety · Traffic Now · Predicted · Risk */}
+            <div className="grid grid-cols-4 gap-1.5 text-center text-xs">
+              <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
+                <div className="text-[9px] text-surface-400 font-bold uppercase">Safety</div>
+                <div className={`font-black mt-0.5 ${recommendedRoute.safety_score >= 80 ? 'text-green-400' : recommendedRoute.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
                   {recommendedRoute.safety_score}
                 </div>
               </div>
-              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
-                <div className="text-[10px] text-surface-400 uppercase">Traffic Now</div>
-                <div className={`font-bold mt-0.5 ${TRAFFIC_COLOR[recommendedRoute.traffic_level] || 'text-cyan-300'}`}>
-                  {TRAFFIC_ICON[recommendedRoute.traffic_level] || '🟡'} {recommendedRoute.traffic_level || 'Moderate'}
+              <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
+                <div className="text-[9px] text-surface-400 font-bold uppercase">Traffic</div>
+                <div className={`font-bold mt-0.5 text-[11px] ${TRAFFIC_COLOR[recommendedRoute.traffic_level] || 'text-cyan-300'}`}>
+                  {TRAFFIC_ICON[recommendedRoute.traffic_level] || '🟡'} {recommendedRoute.traffic_level || 'Mod'}
                 </div>
               </div>
-              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
-                <div className="text-[10px] text-surface-400 uppercase">Predicted</div>
-                <div className={`font-bold mt-0.5 ${recommendedRoute.prediction_available ? (TRAFFIC_COLOR[recommendedRoute.predicted_congestion] || 'text-surface-300') : 'text-surface-500'}`}>
+              <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
+                <div className="text-[9px] text-surface-400 font-bold uppercase">Predicted</div>
+                <div className={`font-bold mt-0.5 text-[11px] ${recommendedRoute.prediction_available ? (TRAFFIC_COLOR[recommendedRoute.predicted_congestion] || 'text-surface-300') : 'text-surface-500'}`}>
                   {recommendedRoute.prediction_available
                     ? <>{TRAFFIC_ICON[recommendedRoute.predicted_congestion] || '🟡'} {recommendedRoute.predicted_congestion}</>
-                    : '— N/A'}
+                    : '—'}
                 </div>
               </div>
-              <div className="bg-surface-800/70 p-2 rounded-lg border border-surface-700/50">
-                <div className="text-[10px] text-surface-400 uppercase">Accident Risk</div>
-                <div className="font-bold text-emerald-400 mt-0.5">
+              <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
+                <div className="text-[9px] text-surface-400 font-bold uppercase">Risk</div>
+                <div className="font-bold text-emerald-400 mt-0.5 text-[11px]">
                   {recommendedRoute.risk_level || 'Low'}
                 </div>
               </div>
             </div>
 
-            {/* Phase 5: Expected Delay & Traffic Source */}
-            {(recommendedRoute.expected_delay_minutes !== null && recommendedRoute.expected_delay_minutes !== undefined) && (
-              <div className="flex items-center justify-between text-xs mt-0.5 px-1">
-                <span className="text-surface-400">Expected delay</span>
-                <span className={`font-semibold ${recommendedRoute.expected_delay_minutes > 5 ? 'text-red-400' : recommendedRoute.expected_delay_minutes > 2 ? 'text-amber-400' : 'text-green-400'}`}>
-                  {recommendedRoute.expected_delay_minutes <= 1 ? '< 1 min' : `+${recommendedRoute.expected_delay_minutes?.toFixed(0)} min`}
-                </span>
-              </div>
-            )}
-            {recommendedRoute.traffic_source && (
-              <div className="text-[9px] text-surface-600 text-right leading-none">
-                Traffic data: {recommendedRoute.traffic_source}
-              </div>
-            )}
-
             {/* WHY THIS ROUTE? */}
             {displayReasons.length > 0 && (
-              <div className="pt-1.5 border-t border-surface-800/80">
-                <div className="text-[11px] font-bold text-surface-300 tracking-wider mb-1.5 uppercase">
+              <div className="pt-2 border-t border-surface-800/80">
+                <div className="text-[10px] font-extrabold text-surface-400 tracking-wider mb-1 uppercase">
                   WHY THIS ROUTE?
                 </div>
                 <div className="space-y-1">
@@ -897,34 +983,36 @@ export default function Navigation() {
           </div>
         )}
 
-        <h3 className="text-xs font-bold uppercase tracking-wider text-surface-400 hidden lg:block mb-2">
-          Route Options ({routes.length})
+        {/* Alternative Routes Header */}
+        <h3 className="text-[10px] font-black uppercase tracking-wider text-surface-400 px-1">
+          Route Alternatives ({routes.length})
         </h3>
 
-        {/* Scroll container on mobile, block layout on desktop */}
-        <div className="flex lg:flex-col flex-row gap-2.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
+        {/* Alternative Route Cards List */}
+        <div className="space-y-2 max-h-44 overflow-y-auto no-scrollbar pr-0.5">
           {routes.map((r, i) => {
             const isSelected = selectedRoute?.route_id
               ? selectedRoute.route_id === r.route_id
               : selectedRoute?.route_type === r.route_type;
             const isRec = r.route_id === recommendedRouteId;
+            const rETA = r.eta_minutes ?? r.duration_min;
 
             return (
               <button
                 key={i}
                 onClick={() => setSelectedRoute(r)}
-                className={`text-left p-3 rounded-xl border transition-all duration-200 flex-shrink-0 lg:w-full w-[240px] relative ${
+                className={`w-full text-left p-3 rounded-xl border transition-all duration-200 relative ${
                   isSelected
                     ? 'border-cyan-500 bg-cyan-950/40 ring-1 ring-cyan-500/50 shadow-md'
-                    : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'
+                    : 'border-surface-700/60 bg-surface-800/50 hover:border-surface-600'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-1.5 truncate">
-                    <span className="font-semibold text-surface-100 text-sm truncate">{r.label}</span>
+                    <span className="font-bold text-surface-100 text-xs truncate">{r.label}</span>
                     {isRec && (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex-shrink-0">
-                        RECOMMENDED
+                      <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex-shrink-0">
+                        REC
                       </span>
                     )}
                   </div>
@@ -934,55 +1022,24 @@ export default function Navigation() {
                   />
                 </div>
 
-                <div className="flex items-baseline justify-between mb-1.5">
+                <div className="flex items-baseline justify-between mb-1">
                   <div className="flex items-baseline gap-2">
-                    <span className="text-base font-bold text-surface-100">{r.duration_min?.toFixed(0)} min</span>
-                    <span className="text-xs text-surface-400">{r.distance_km} km</span>
+                    <span className="text-sm font-black text-surface-100">{rETA?.toFixed(0)} min</span>
+                    <span className="text-[11px] text-surface-400">{r.distance_km} km</span>
                   </div>
                   {r.overall_score !== undefined && (
-                    <span className="text-xs font-extrabold text-cyan-400">
-                      Overall: {r.overall_score}/100
+                    <span className="text-[11px] font-black text-cyan-400">
+                      Score: {r.overall_score}/100
                     </span>
                   )}
                 </div>
 
-                {/* Phase 5: route card stats grid — Current traffic + Predicted */}
-                <div className="space-y-1.5 mt-1">
-                  <div className="grid grid-cols-3 gap-1 text-[10px] text-surface-400 border-t border-surface-700/40 pt-1.5">
-                    <div>Safety: <span className="font-medium text-surface-200">{r.safety_score}</span></div>
-                    <div className={TRAFFIC_COLOR[r.traffic_level] || 'text-cyan-300'}>
-                      {TRAFFIC_ICON[r.traffic_level] || '🟡'} {r.traffic_level || 'Mod'}
-                    </div>
-                    <div>Risk: <span className="font-medium text-surface-200">{r.risk_level || 'Low'}</span></div>
+                <div className="grid grid-cols-3 gap-1 text-[10px] text-surface-400 border-t border-surface-700/40 pt-1">
+                  <div>Safety: <span className="font-semibold text-surface-200">{r.safety_score}</span></div>
+                  <div className={TRAFFIC_COLOR[r.traffic_level] || 'text-cyan-300'}>
+                    {TRAFFIC_ICON[r.traffic_level] || '🟡'} {r.traffic_level || 'Mod'}
                   </div>
-
-                  {/* Phase 5: Predicted congestion row */}
-                  {r.prediction_available && r.predicted_congestion && (
-                    <div className={`flex items-center justify-between text-[10px] rounded px-1.5 py-0.5 ${TRAFFIC_BG[r.predicted_congestion] || ''}`}>
-                      <span className="text-surface-400">Predicted ({r.prediction_horizon_minutes}min)</span>
-                      <span className={`font-semibold ${TRAFFIC_COLOR[r.predicted_congestion] || 'text-surface-200'}`}>
-                        {TRAFFIC_ICON[r.predicted_congestion]} {r.predicted_congestion}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Phase 5: Expected delay */}
-                  {r.expected_delay_minutes !== null && r.expected_delay_minutes !== undefined && (
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-surface-500">Delay</span>
-                      <span className={`font-semibold ${r.expected_delay_minutes > 5 ? 'text-red-400' : r.expected_delay_minutes > 2 ? 'text-amber-400' : 'text-green-400'}`}>
-                        {r.expected_delay_minutes <= 1 ? '~0 min' : `+${r.expected_delay_minutes?.toFixed(0)} min`}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Phase 7: Active Hazards on Route */}
-                  {r.active_hazards_nearby > 0 && (
-                    <div className="flex items-center justify-between text-[10px] bg-red-950/40 border border-red-500/20 rounded px-1.5 py-0.5 mt-1 text-red-300 font-semibold">
-                      <span>⚠️ Active Hazards</span>
-                      <span className="font-extrabold">{r.active_hazards_nearby}</span>
-                    </div>
-                  )}
+                  <div>Risk: <span className="font-semibold text-surface-200">{r.risk_level || 'Low'}</span></div>
                 </div>
               </button>
             );
@@ -992,149 +1049,134 @@ export default function Navigation() {
         {/* START NAVIGATION BUTTON */}
         <button
           onClick={startNavigation}
-          className="w-full mt-3 py-3 rounded-xl font-bold text-white text-base bg-green-600 hover:bg-green-500 shadow-md transition-colors duration-200 flex items-center justify-center gap-2"
+          className="w-full py-3 rounded-2xl font-black text-white text-sm bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-xl transition-all duration-200 active:scale-98 flex items-center justify-center gap-2"
         >
           <HiPlay className="w-5 h-5" /> Start Navigation
         </button>
-      </>
+      </div>
     );
   };
 
   return (
-    <div className="h-[calc(100vh-2rem)] flex flex-col lg:flex-row gap-4 animate-fade-in relative overflow-hidden">
+    <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-surface-950 z-0">
 
-      {/* ===== SIDEBAR / LEFT PANEL (DESKTOP) ===== */}
-      <div className="hidden lg:flex lg:w-96 lg:flex-col lg:gap-4 flex-shrink-0">
-        {/* Search Planner Box */}
-        <div className="glass-card p-5 shadow-xl bg-surface-900/95 border border-surface-800">
-          {renderPlannerContent()}
-        </div>
+      {/* ===== FLOATING TOP-RIGHT NAVBAR CONTROLS ===== */}
+      <NavbarControls showTraffic={showTraffic} onToggleTraffic={() => setShowTraffic(v => !v)} />
 
-        {/* Alternatives List */}
-        {routes.length > 0 && (
-          <div className="glass-card p-5 space-y-3 bg-surface-900/95 border border-surface-800">
-            {renderAlternativesContent()}
-          </div>
-        )}
-      </div>
-
-      {/* ===== FLOATING INTERFACES (MOBILE) ===== */}
-      <div className="lg:hidden">
-        {/* Search Planner Box (Mobile Overlay) */}
-        {!isNavigating && (
-          <div className="absolute top-4 left-4 right-4 z-[999] glass-card p-4 shadow-xl bg-surface-900/95 backdrop-blur-md border border-surface-800">
+      {/* ===== FLOATING ROUTE PLANNER CARD (TOP-LEFT) ===== */}
+      {!isNavigating && (
+        <div className="fixed top-4 left-4 sm:left-20 z-[1000] w-[calc(100vw-2rem)] max-w-sm pointer-events-auto">
+          <div className="glass-card p-4 shadow-2xl bg-surface-900/95 backdrop-blur-xl border border-surface-800/80 rounded-2xl">
             {renderPlannerContent()}
           </div>
-        )}
 
-        {/* Alternatives List Drawer (Mobile Overlay) */}
-        {routes.length > 0 && !isNavigating && (
-          <div className="absolute bottom-4 left-4 right-4 z-[999] bg-surface-900/95 backdrop-blur-md p-4 rounded-xl border border-surface-800 shadow-2xl">
-            {renderAlternativesContent()}
-          </div>
-        )}
-      </div>
-
-      {/* ===== NAVIGATION HUD (shown during live nav) ===== */}
-      {isNavigating && (
-        <div className="absolute top-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-96 z-[1000] flex flex-col gap-3 pointer-events-none">
-          <div className="pointer-events-auto flex flex-col gap-3">
-            {/* Active Hotspot Proximity Warning Banner */}
-            {activeHotspotWarning && (
-              <div className="glass-card p-4 border-l-4 border-red-500 bg-red-950/90 backdrop-blur-md shadow-2xl text-red-100 flex items-center justify-between animate-bounce">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">⚠️</span>
-                  <div>
-                    <div className="font-bold text-xs uppercase tracking-wider text-red-400">Approaching Accident Hotspot</div>
-                    <div className="font-semibold text-sm">{activeHotspotWarning.name}</div>
-                    <div className="text-xs text-red-300 font-medium">
-                      {activeHotspotWarning.fatal_count} fatal incident{activeHotspotWarning.fatal_count !== 1 ? 's' : ''} recorded nearby
-                    </div>
-                  </div>
-                </div>
-                <button onClick={() => setActiveHotspotWarning(null)} className="text-red-400 hover:text-white p-1 font-bold">✕</button>
-              </div>
-            )}
-
-            {/* Turn instruction card */}
-            <div className="glass-card p-6 border-l-4 border-primary-400 shadow-2xl bg-surface-900/90 backdrop-blur-md">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-2xl bg-primary-500/20 flex items-center justify-center">
-                  <navInstruction.icon className="w-8 h-8 text-primary-400" />
-                </div>
-                <div>
-                  <p className="text-xl font-bold text-surface-100">{navInstruction.text}</p>
-                  <p className="text-sm text-surface-400">on current road</p>
-                </div>
-              </div>
+          {/* Floating Route Options Drawer directly below search planner */}
+          {routes.length > 0 && (
+            <div className="mt-3 glass-card p-4 shadow-2xl bg-surface-900/95 backdrop-blur-xl border border-surface-800/80 rounded-2xl max-h-[calc(100vh-280px)] overflow-y-auto no-scrollbar">
+              {renderAlternativesContent()}
             </div>
-
-            {/* Stats row */}
-            <div className="grid grid-cols-3 gap-3 mt-3">
-              <div className="glass-card p-3 text-center bg-surface-900/80">
-                <p className="text-xl font-bold text-primary-400">{navSpeed}</p>
-                <p className="text-[10px] uppercase tracking-wider text-surface-500">km/h</p>
-              </div>
-              <div className="glass-card p-3 text-center bg-surface-900/80">
-                <p className="text-xl font-bold text-surface-100">{navDistLeft}</p>
-                <p className="text-[10px] uppercase tracking-wider text-surface-500">km left</p>
-              </div>
-              <div className="glass-card p-3 text-center bg-surface-900/80">
-                <p className="text-xl font-bold text-green-400">{navETA}</p>
-                <p className="text-[10px] uppercase tracking-wider text-surface-500">min</p>
-              </div>
-            </div>
-
-            {/* Progress bar */}
-            <div className="glass-card p-3 mt-3 bg-surface-900/80">
-              <div className="w-full h-2 rounded-full bg-surface-800 overflow-hidden">
-                <div className="h-full rounded-full bg-primary-500 transition-all duration-200"
-                  style={{ width: `${navProgress}%` }} />
-              </div>
-            </div>
-
-            {/* Stop button */}
-            <button onClick={stopNavigation}
-              className="w-full mt-3 py-3 rounded-xl font-bold text-white bg-red-600 hover:bg-red-500 shadow-md transition-colors duration-200 flex items-center justify-center gap-2">
-              <HiStop className="w-5 h-5" /> Stop Navigation
-            </button>
-          </div>
+          )}
         </div>
       )}
 
-      {/* ===== MAP ===== */}
-      <div className="flex-1 lg:glass-card overflow-hidden min-h-[300px] lg:relative absolute inset-0 w-full h-full lg:z-auto z-0">
-        <MapContainer center={BANGALORE_CENTER} zoom={12} className="h-full w-full" style={{ borderRadius: '0.75rem' }}>
-          {/* Base map */}
+      {/* ===== NAVIGATION HUD OVERLAY (DURING LIVE NAVIGATION) ===== */}
+      {isNavigating && (
+        <div className="fixed top-4 left-4 right-4 lg:left-auto lg:right-4 lg:w-96 z-[1001] flex flex-col gap-3 pointer-events-auto">
+          {/* Active Hotspot Warning Banner */}
+          {activeHotspotWarning && (
+            <div className="glass-card p-4 border-l-4 border-red-500 bg-red-950/90 backdrop-blur-xl shadow-2xl text-red-100 flex items-center justify-between animate-bounce rounded-2xl">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <div className="font-black text-[10px] uppercase tracking-wider text-red-400">Approaching Accident Hotspot</div>
+                  <div className="font-bold text-sm">{activeHotspotWarning.name}</div>
+                  <div className="text-xs text-red-300 font-medium">
+                    {activeHotspotWarning.fatal_count} fatal incident{activeHotspotWarning.fatal_count !== 1 ? 's' : ''} recorded nearby
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setActiveHotspotWarning(null)} className="text-red-400 hover:text-white p-1 font-bold">✕</button>
+            </div>
+          )}
+
+          {/* Turn instruction card */}
+          <div className="glass-card p-5 border-l-4 border-cyan-400 shadow-2xl bg-surface-900/95 backdrop-blur-xl rounded-2xl">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 flex items-center justify-center">
+                <navInstruction.icon className="w-7 h-7 text-cyan-400" />
+              </div>
+              <div>
+                <p className="text-lg font-black text-surface-100">{navInstruction.text}</p>
+                <p className="text-xs text-surface-400">on current route step</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation Live Stats */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="glass-card p-2.5 text-center bg-surface-900/90 rounded-xl border border-surface-800">
+              <p className="text-lg font-black text-cyan-400">{navSpeed}</p>
+              <p className="text-[9px] font-bold uppercase tracking-wider text-surface-500">km/h</p>
+            </div>
+            <div className="glass-card p-2.5 text-center bg-surface-900/90 rounded-xl border border-surface-800">
+              <p className="text-lg font-black text-surface-100">{navDistLeft}</p>
+              <p className="text-[9px] font-bold uppercase tracking-wider text-surface-500">km left</p>
+            </div>
+            <div className="glass-card p-2.5 text-center bg-surface-900/90 rounded-xl border border-surface-800">
+              <p className="text-lg font-black text-emerald-400">{navETA}</p>
+              <p className="text-[9px] font-bold uppercase tracking-wider text-surface-500">min ETA</p>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="glass-card p-2.5 bg-surface-900/90 rounded-xl border border-surface-800">
+            <div className="w-full h-2 rounded-full bg-surface-800 overflow-hidden">
+              <div className="h-full rounded-full bg-cyan-500 transition-all duration-300"
+                style={{ width: `${navProgress}%` }} />
+            </div>
+          </div>
+
+          {/* Stop button */}
+          <button onClick={stopNavigation}
+            className="w-full py-3 rounded-2xl font-bold text-white bg-red-600 hover:bg-red-500 shadow-xl transition-colors duration-200 flex items-center justify-center gap-2">
+            <HiStop className="w-5 h-5" /> Stop Navigation
+          </button>
+        </div>
+      )}
+
+      {/* ===== FULL-SCREEN LEAFLET MAP ===== */}
+      <div className="w-full h-full absolute inset-0 z-0">
+        <MapContainer center={BANGALORE_CENTER} zoom={12} className="h-full w-full">
+          {/* Base Map */}
           <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          {/* TomTom real-time traffic overlay — proxied through backend so API key stays server-side */}
+          
+          {/* TomTom Real-Time Traffic Overlay Layer */}
           {showTraffic && (
             <TileLayer
               url="http://127.0.0.1:8000/api/traffic/tile/{z}/{x}/{y}"
               tileSize={256}
               opacity={0.75}
-              attribution='Traffic &copy; <a href="https://www.tomtom.com" target="_blank">TomTom</a>'
+              attribution='Traffic &copy; TomTom'
               zIndex={10}
             />
           )}
+
           {!isNavigating && <FitBounds bounds={bounds} />}
           <FollowMarker position={navPosition} isNavigating={isNavigating} />
 
-          {/* Source & Dest markers */}
+          {/* Source & Destination Markers */}
           {sourceCoord && <Marker position={sourceCoord} icon={srcIcon}><Popup><b>Start:</b> {source}</Popup></Marker>}
           {destCoord && <Marker position={destCoord} icon={dstIcon}><Popup><b>Destination:</b> {dest}</Popup></Marker>}
 
-          {/* Dimmed alternative routes (Clickable Google Maps style) */}
+          {/* Alternative Routes (dimmed lines) */}
           {!isNavigating && routes.map((r, i) => (
             ((selectedRoute?.route_id && r.route_id) ? r.route_id !== selectedRoute.route_id : r.route_type !== selectedRoute?.route_type) && (
               <g key={i}>
-                {/* Thick invisible overlay to make clicking easier */}
                 <Polyline
                   positions={r.waypoints}
                   pathOptions={{ color: '#000000', weight: 14, opacity: 0 }}
                   eventHandlers={{ click: () => setSelectedRoute(r) }}
                 />
-                {/* Grey alternative route line */}
                 <Polyline
                   positions={r.waypoints}
                   pathOptions={{ color: '#9aa0a6', weight: 4, opacity: 0.8 }}
@@ -1144,15 +1186,13 @@ export default function Navigation() {
             )
           ))}
 
-          {/* Selected active route (Google Maps Blue with double-layered casing) */}
+          {/* Selected Active Route */}
           {selectedRoute && (
             <g>
-              {/* Outer stroke/casing */}
               <Polyline
                 positions={selectedRoute.waypoints}
                 pathOptions={{ color: '#1558b0', weight: isNavigating ? 10 : 8, opacity: 0.4 }}
               />
-              {/* Inner core line */}
               <Polyline
                 positions={selectedRoute.waypoints}
                 pathOptions={{ color: '#4285F4', weight: isNavigating ? 6 : 5, opacity: 0.95 }}
@@ -1160,7 +1200,7 @@ export default function Navigation() {
             </g>
           )}
 
-          {/* Travelled path (green overlay during nav) */}
+          {/* Travelled path (green overlay during live nav) */}
           {isNavigating && travelledPath.length > 1 && (
             <Polyline positions={travelledPath} pathOptions={{ color: '#22c55e', weight: 6, opacity: 0.7 }} />
           )}
@@ -1178,7 +1218,7 @@ export default function Navigation() {
             </CircleMarker>
           ))}
 
-          {/* Empirical Accident Hotspots for selected route */}
+          {/* Empirical Accident Hotspots */}
           {selectedRoute?.hotspots?.map((hs, i) => (
             <CircleMarker
               key={`hs-${i}`}
@@ -1204,7 +1244,8 @@ export default function Navigation() {
               </Popup>
             </CircleMarker>
           ))}
-          {/* Click handler to set report coords */}
+
+          {/* Map click handler for reporting */}
           <MapClickHandler onMapClick={(latlng) => {
             if (isReporting) {
               setReportLat(latlng.lat.toFixed(6));
@@ -1213,7 +1254,7 @@ export default function Navigation() {
             }
           }} active={isReporting} />
 
-          {/* Live User Road Hazards (Phase 6) */}
+          {/* Live User Road Hazards */}
           {hazards.map((h) => (
             <Marker
               key={`hazard-${h.id}`}
@@ -1255,29 +1296,17 @@ export default function Navigation() {
           ))}
         </MapContainer>
 
-        {/* Map Overlay Buttons */}
-        <div className={`absolute right-6 z-[1000] flex flex-col gap-2 transition-all duration-300 ${routes.length > 0 && !isNavigating ? 'bottom-56 lg:bottom-6' : 'bottom-6'}`}>
-          {/* Live Traffic toggle */}
-          <button
-            onClick={() => setShowTraffic(v => !v)}
-            title={showTraffic ? 'Hide Live Traffic' : 'Show Live Traffic'}
-            className={`px-3 py-2 rounded-xl border text-xs font-semibold shadow-lg transition-all duration-200 active:scale-95 flex items-center gap-1.5
-              ${showTraffic
-                ? 'bg-green-600/90 border-green-500 text-white hover:bg-green-500'
-                : 'bg-surface-800 border-surface-700 text-surface-400 hover:bg-surface-700'}`}
-          >
-            <span className={`w-2 h-2 rounded-full ${showTraffic ? 'bg-green-300 animate-pulse' : 'bg-surface-600'}`} />
-            Live Traffic
-          </button>
+        {/* Floating Map Action Buttons (Bottom Right) */}
+        <div className="fixed bottom-6 right-6 z-[1000] flex flex-col gap-2 pointer-events-auto">
           {!isNavigating && (
-            <button onClick={locateUser} title="Locate Me"
-              className="p-3 rounded-full bg-surface-800 border border-surface-700 text-primary-400 hover:bg-surface-700 shadow-lg transition-colors active:scale-95">
+            <button onClick={locateUser} title="Locate My Position"
+              className="p-3 rounded-2xl bg-surface-900/90 border border-surface-700 text-cyan-400 hover:bg-surface-800 shadow-2xl backdrop-blur-md transition-all active:scale-95">
               <HiOutlineLocationMarker className="w-6 h-6" />
             </button>
           )}
           {isNavigating && (
-            <button onClick={() => setNavPosition([...navPosition])} title="Recenter"
-              className="p-3 rounded-full bg-primary-600 text-white hover:bg-primary-500 shadow-lg transition-colors active:scale-95">
+            <button onClick={() => setNavPosition([...navPosition])} title="Recenter Position"
+              className="p-3 rounded-2xl bg-cyan-600 text-white hover:bg-cyan-500 shadow-2xl transition-all active:scale-95">
               <HiPaperAirplane className="w-6 h-6" />
             </button>
           )}

@@ -20,7 +20,7 @@ export default function Login() {
     try {
       await login(form.email, form.pin);
       toast.success('Welcome back!');
-      navigate('/dashboard');
+      navigate('/navigate');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Invalid email or PIN');
     } finally {
