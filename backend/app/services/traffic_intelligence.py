@@ -150,7 +150,10 @@ async def _fetch_tomtom_flow_point(
 
 
 async def _get_route_tomtom_traffic(
-    sampled_points: List[Tuple[float, float]], api_key: str
+    sampled_points: List[Tuple[float, float]],
+    api_key: str,
+    duration_min: float = 0.0,
+    distance_km: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Fetch TomTom flow data for a sample of route points.
@@ -174,29 +177,34 @@ async def _get_route_tomtom_traffic(
     if not results:
         return {"available": False, "source": "tomtom_no_data"}
 
-    # Aggregate: mean speed ratio, weighted by confidence
-    total_weight = sum(r["confidence"] for r in results) or len(results)
+    # Aggregate: weighted mean speeds from TomTom probes
+    total_weight = sum(r["confidence"] for r in results) or float(len(results))
+    avg_current_speed = sum(r["current_speed_kmh"] * r["confidence"] for r in results) / total_weight
+    avg_free_flow_speed = sum(r["free_flow_speed_kmh"] * r["confidence"] for r in results) / total_weight
     avg_speed_ratio = sum(r["speed_ratio"] * r["confidence"] for r in results) / total_weight
     avg_confidence = sum(r["confidence"] for r in results) / len(results)
 
-    # Total delay from travel time differences (where available)
-    delay_seconds = 0.0
-    delay_points = 0
-    for r in results:
-        if r["current_travel_time_s"] and r["free_flow_travel_time_s"]:
-            delay_seconds += max(0.0, r["current_travel_time_s"] - r["free_flow_travel_time_s"])
-            delay_points += 1
+    # Determine baseline route duration in minutes
+    base_min = duration_min
+    if base_min <= 0.0 and distance_km > 0.0:
+        base_speed = avg_free_flow_speed if avg_free_flow_speed > 0 else 40.0
+        base_min = (distance_km / base_speed) * 60.0
 
-    # Scale raw per-segment delay to full route by ratio of coverage
     expected_delay_min: Optional[float] = None
-    if delay_points > 0:
-        # Proportional: each probe covers ~route_length/probe_points of the route
-        raw_delay_min = delay_seconds / 60.0
-        # The delay observed covers (delay_points / len(probe_points)) of the route
-        coverage_ratio = len(probe_points) / len(sampled_points) if sampled_points else 1.0
-        # Scale delay to full route length
-        if coverage_ratio > 0:
-            expected_delay_min = round(raw_delay_min / coverage_ratio, 1)
+    if base_min > 0.0:
+        # Effective speed ratio compares TomTom physical current speed against baseline OSRM speed
+        if distance_km > 0.0 and base_min > 0.0:
+            osrm_speed = (distance_km / (base_min / 60.0))
+            if osrm_speed > 0 and avg_current_speed > 0:
+                effective_ratio = min(1.0, avg_current_speed / osrm_speed)
+            else:
+                effective_ratio = max(0.1, min(1.0, avg_speed_ratio))
+        else:
+            effective_ratio = max(0.1, min(1.0, avg_speed_ratio))
+
+        clamped_ratio = max(0.1, effective_ratio)
+        raw_delay = base_min * ((1.0 / clamped_ratio) - 1.0)
+        expected_delay_min = round(max(0.0, raw_delay), 1)
 
     # Current traffic score: speed_ratio → 0-100 (100 = free flow)
     current_traffic_score = round(min(98.0, max(10.0, avg_speed_ratio * 100.0)), 1)
@@ -297,106 +305,54 @@ def _get_route_junction_predictions(
 
     # Try loading genuine LSTM model if present (checks for prod model)
     global _lstm_model, _lstm_scaler, _lstm_loaded
-    if not _lstm_loaded:
-        _lstm_loaded = True
-        try:
-            import joblib
-            ml_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-                "ml", "models",
-            )
-            model_path = os.path.join(ml_dir, "traffic_lstm_prod.h5")
-            scaler_path = os.path.join(ml_dir, "traffic_scaler_prod.pkl")
-            if os.path.exists(model_path) and os.path.exists(scaler_path):
-                os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
-                from tensorflow.keras.models import load_model
-                _lstm_model = load_model(model_path, compile=False)
-                _lstm_scaler = joblib.load(scaler_path)
-        except Exception:
-            pass
-
-    lstm_available = _lstm_model is not None and _lstm_scaler is not None
-
     try:
-        import numpy as np
-        from ..models.traffic import TrafficData
-        
+        from .traffic_collector import predict_traffic_lstm
+
         junc_predictions = []
         has_any_lstm = False
         
         for j in matched_junctions:
-            has_lstm = False
-            # Production LSTM prediction is only evaluated for Junction 1 if sufficient real DB observations exist
-            if j["id"] == 1 and lstm_available and db is not None:
-                # Query last 24 hours of observations (must be real, non-test)
-                timestamps = [now - timedelta(hours=h) for h in range(24, 0, -1)]
-                sequence = []
-                for ts in timestamps:
-                    start_ts = ts - timedelta(minutes=30)
-                    end_ts = ts + timedelta(minutes=30)
-                    obs = (
-                        db.query(TrafficData)
-                        .filter(
-                            TrafficData.junction_id == j["id"],
-                            TrafficData.is_test == False,
-                            TrafficData.timestamp.between(start_ts, end_ts),
-                            TrafficData.speed_ratio != None
-                        )
-                        .order_by(TrafficData.timestamp.desc())
-                        .first()
-                    )
-                    if obs:
-                        sequence.append(float(obs.speed_ratio))
-                    else:
-                        break
-                
-                if len(sequence) == 24:
-                    has_lstm = True
-                    has_any_lstm = True
-                    # Run LSTM prediction on speed ratio
-                    window_arr = np.array(sequence, dtype="float32").reshape(1, 24, 1)
-                    scaled_window = _lstm_scaler.transform(window_arr.reshape(-1, 1)).reshape(1, 24, 1)
-                    pred_scaled = _lstm_model.predict(scaled_window, verbose=0)
-                    pred_speed_ratio = float(_lstm_scaler.inverse_transform(pred_scaled)[0][0])
-                    pred_speed_ratio = max(0.0, min(1.0, pred_speed_ratio))
-                    
-                    # Compute score: higher speed ratio = better traffic (less congestion)
+            if db is not None:
+                preds = predict_traffic_lstm(db, junction_id=j["id"], hours_ahead=1, use_test_model=False)
+                if preds and len(preds) > 0:
+                    p = preds[0]
+                    pred_speed_ratio = p.get("predicted_speed_ratio", 0.5)
                     predicted_score = round(max(10.0, min(98.0, pred_speed_ratio * 100.0)), 1)
-                    pred_count = int((1.0 - pred_speed_ratio) * MAX_VEHICLE_COUNT)
+                    has_any_lstm = True
 
                     junc_predictions.append({
                         "junction_id": j["id"],
                         "junction_name": j["name"],
-                        "vehicle_count": pred_count,
+                        "vehicle_count": p.get("predicted_vehicle_count", 0),
                         "predicted_traffic_score": predicted_score,
                         "source": "lstm_model",
                         "target_hour": target_hour,
                     })
 
-            if not has_lstm:
-                # Fall back to heuristic hour patterns model
-                hp = _hour_pattern_predict(j["id"], target_hour)
-                junc_predictions.append({
-                    "junction_id": j["id"],
-                    "junction_name": j["name"],
-                    "vehicle_count": hp["vehicle_count"],
-                    "predicted_traffic_score": hp["predicted_traffic_score"],
-                    "source": "hour_pattern_model",
-                    "target_hour": target_hour,
-                })
-
-        avg_pred_score = round(
-            sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
-        )
-        return {
-            "prediction_available": has_any_lstm,  # ONLY True if genuine LSTM ran successfully
-            "predicted_traffic_score": avg_pred_score,
-            "junction_predictions": junc_predictions,
-            "junctions_on_route": [j["name"] for j in matched_junctions],
-            "source": "lstm_model" if has_any_lstm else "hour_pattern_model",
-            "prediction_horizon_minutes": prediction_horizon_minutes,
-            "target_hour": target_hour,
-        }
+        if has_any_lstm and junc_predictions:
+            avg_pred_score = round(
+                sum(p["predicted_traffic_score"] for p in junc_predictions) / len(junc_predictions), 1
+            )
+            return {
+                "prediction_available": True,
+                "predicted_traffic_score": avg_pred_score,
+                "junction_predictions": junc_predictions,
+                "junctions_on_route": [j["name"] for j in matched_junctions],
+                "source": "lstm_model",
+                "prediction_horizon_minutes": prediction_horizon_minutes,
+                "target_hour": target_hour,
+            }
+        else:
+            return {
+                "prediction_available": False,
+                "reason": "Legitimate historical traffic observations are missing or LSTM model is not trained yet",
+                "predicted_traffic_score": None,
+                "junction_predictions": [],
+                "junctions_on_route": [j["name"] for j in matched_junctions],
+                "source": "unavailable",
+                "prediction_horizon_minutes": prediction_horizon_minutes,
+                "target_hour": target_hour,
+            }
     except Exception as e:
         logger.exception("Error in route junction prediction:")
 
@@ -406,7 +362,7 @@ def _get_route_junction_predictions(
         "predicted_traffic_score": None,
         "junction_predictions": [],
         "junctions_on_route": [j["name"] for j in matched_junctions],
-        "source": "hour_pattern_model",
+        "source": "unavailable",
         "prediction_horizon_minutes": prediction_horizon_minutes,
         "target_hour": target_hour,
     }
@@ -513,27 +469,29 @@ async def evaluate_route_traffic_intelligence(
     sampled = _sample_waypoints(waypoints, target_spacing_km=0.6)
 
     # ── Step 1: Real-time TomTom flow (async) ────────────────────────────────
-    rt_data = await _get_route_tomtom_traffic(sampled, tomtom_api_key)
+    rt_data = await _get_route_tomtom_traffic(
+        sampled, tomtom_api_key, duration_min=duration_min, distance_km=distance_km
+    )
 
     if rt_data["available"]:
         current_score = rt_data["current_traffic_score"]
-        current_source = rt_data["source"]
+        current_source = "tomtom_live"
         confidence = rt_data.get("avg_confidence", 0.8)
-        expected_delay = rt_data.get("expected_delay_minutes")
+        expected_delay = rt_data.get("expected_delay_minutes") or 0.0
     else:
-        # Fallback: junction-proximity model
+        # Fallback: neutral score when TomTom API key/data is unconfigured/unavailable
         fb = _junction_proximity_fallback(sampled)
         current_score = fb["current_traffic_score"]
-        current_source = fb["source"]
+        current_source = "unavailable"
         confidence = fb.get("avg_confidence", 0.5)
-        expected_delay = None
+        expected_delay = 0.0
 
     # ── Step 2: Predictions for junctions on route ───────────────────────────
     pred_data = _get_route_junction_predictions(sampled, prediction_horizon_minutes, db=db)
 
     prediction_available = pred_data.get("prediction_available", False)
     predicted_score: Optional[float] = pred_data.get("predicted_traffic_score") if prediction_available else None
-    pred_source = pred_data.get("source", "") if prediction_available else ""
+    pred_source = "lstm_model" if prediction_available else ""
     junctions_on_route = pred_data.get("junctions_on_route", [])
 
     # ── Step 3: Blend into unified traffic_score ─────────────────────────────
@@ -541,7 +499,6 @@ async def evaluate_route_traffic_intelligence(
     w_predicted = TRAFFIC_BLEND_WEIGHTS["predicted"]
 
     if prediction_available and predicted_score is not None:
-        # Normalise blend weights to sum to 1.0
         total_w = w_current + w_predicted
         traffic_score = round(
             (current_score * (w_current / total_w))
@@ -557,10 +514,13 @@ async def evaluate_route_traffic_intelligence(
     predicted_congestion = _score_to_congestion_level(predicted_score) if predicted_score is not None else None
 
     # ── Step 5: Compose source label ─────────────────────────────────────────
-    sources = [current_source]
+    sources = []
+    if current_source != "unavailable":
+        sources.append(current_source)
     if pred_source:
         sources.append(pred_source)
-    traffic_source = "+".join(s for s in sources if s)
+    
+    traffic_source = "+".join(sources) if sources else "unavailable"
 
     return {
         "traffic_score": traffic_score,

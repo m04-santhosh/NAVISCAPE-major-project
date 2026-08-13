@@ -96,6 +96,9 @@ class EvaluatedRouteOutput(BaseModel):
     route_type: str
     distance_km: float
     duration_min: float
+    traffic_delay_minutes: float = 0.0
+    hazard_delay_minutes: float = 0.0
+    expected_delay_minutes: Optional[float] = 0.0
     eta_minutes: float
     safety_score: float
     accident_risk_score: float
@@ -117,7 +120,6 @@ class EvaluatedRouteOutput(BaseModel):
     # Phase 5 traffic intelligence fields
     current_traffic_score: Optional[float] = None
     predicted_congestion: Optional[str] = None
-    expected_delay_minutes: Optional[float] = None
     traffic_source: Optional[str] = None
     traffic_confidence: Optional[float] = None
     prediction_available: bool = False

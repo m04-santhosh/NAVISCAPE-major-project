@@ -5,9 +5,8 @@ Also proxies real-time TomTom traffic flow tiles server-side.
 Phase 5: Adds POST /api/traffic/evaluate-route for route-specific traffic intelligence.
 """
 
-import random
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional, Union
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -84,60 +83,67 @@ JUNCTIONS = {
 }
 
 
-def simulate_traffic(junction_id: int, hour: int, day: int) -> dict:
-    """Simulate realistic traffic data based on time patterns."""
-    base_count = random.randint(80, 200)
-
-    # Rush hour multiplier
-    if hour in [8, 9, 17, 18, 19]:
-        base_count = int(base_count * random.uniform(2.0, 3.0))
-    elif hour in [7, 10, 16, 20]:
-        base_count = int(base_count * random.uniform(1.5, 2.0))
-    elif hour in [0, 1, 2, 3, 4, 5]:
-        base_count = int(base_count * random.uniform(0.1, 0.3))
-
-    # Weekend reduction
-    if day >= 5:
-        base_count = int(base_count * 0.7)
-
-    # Junction-specific multiplier (Silk Board is always busier)
-    if junction_id == 1:
-        base_count = int(base_count * 1.5)
-
-    avg_speed = max(5, 60 - (base_count / 10) + random.uniform(-5, 5))
-
-    if base_count > 400:
-        congestion = "critical"
-    elif base_count > 250:
-        congestion = "high"
-    elif base_count > 150:
-        congestion = "medium"
-    else:
-        congestion = "low"
-
-    return {
-        "vehicle_count": base_count,
-        "avg_speed": round(avg_speed, 1),
-        "congestion_level": congestion,
-    }
-
-
 @router.get("/current")
-async def get_current_traffic(current_user=Depends(get_current_user)):
-    """Get simulated current traffic data for all junctions."""
+async def get_current_traffic(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get current traffic data for all monitored junctions.
+    Returns real TomTom traffic observations if collected; otherwise returns structured unavailable response.
+    """
     now = datetime.now()
     results = []
 
     for jid, info in JUNCTIONS.items():
-        traffic = simulate_traffic(jid, now.hour, now.weekday())
-        results.append({
-            "junction_id": jid,
-            "junction_name": info["name"],
-            "latitude": info["lat"],
-            "longitude": info["lng"],
-            "timestamp": now.isoformat(),
-            **traffic,
-        })
+        obs = (
+            db.query(TrafficData)
+            .filter(TrafficData.junction_id == jid, TrafficData.is_test == False)
+            .order_by(TrafficData.timestamp.desc())
+            .first()
+        )
+        if obs:
+            cong = obs.congestion_level
+            if not cong and obs.speed_ratio is not None:
+                if obs.speed_ratio < 0.4:
+                    cong = "critical"
+                elif obs.speed_ratio < 0.7:
+                    cong = "high"
+                elif obs.speed_ratio < 0.9:
+                    cong = "medium"
+                else:
+                    cong = "low"
+
+            results.append({
+                "junction_id": jid,
+                "junction_name": info["name"],
+                "latitude": info["lat"],
+                "longitude": info["lng"],
+                "timestamp": obs.timestamp.isoformat() if obs.timestamp else now.isoformat(),
+                "vehicle_count": obs.vehicle_count or 0,
+                "avg_speed": obs.avg_speed,
+                "free_flow_speed": obs.free_flow_speed,
+                "speed_ratio": obs.speed_ratio,
+                "congestion_level": cong or "low",
+                "data_available": True,
+                "data_source": "tomtom_observation",
+            })
+        else:
+            results.append({
+                "junction_id": jid,
+                "junction_name": info["name"],
+                "latitude": info["lat"],
+                "longitude": info["lng"],
+                "timestamp": now.isoformat(),
+                "vehicle_count": None,
+                "avg_speed": None,
+                "free_flow_speed": None,
+                "speed_ratio": None,
+                "congestion_level": None,
+                "data_available": False,
+                "data_source": "unavailable",
+                "reason": "Real traffic observations are not available yet",
+            })
 
     return results
 
@@ -147,51 +153,73 @@ async def get_historical_traffic(
     junction_id: int = Query(1, ge=1, le=8),
     days: int = Query(7, ge=1, le=30),
     current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Get simulated historical traffic data for a junction."""
-    now = datetime.now()
-    results = []
+    """
+    Get historical traffic data for a junction from database observations.
+    """
+    cutoff = datetime.now() - timedelta(days=days)
+    records = (
+        db.query(TrafficData)
+        .filter(
+            TrafficData.junction_id == junction_id,
+            TrafficData.is_test == False,
+            TrafficData.timestamp >= cutoff
+        )
+        .order_by(TrafficData.timestamp.asc())
+        .all()
+    )
 
-    for day_offset in range(days, 0, -1):
-        for hour in range(24):
-            dt = now - timedelta(days=day_offset, hours=now.hour - hour)
-            traffic = simulate_traffic(junction_id, hour, dt.weekday())
-            results.append({
-                "timestamp": dt.replace(hour=hour, minute=0, second=0).isoformat(),
-                "hour": hour,
-                "day_of_week": dt.weekday(),
-                **traffic,
-            })
+    if records:
+        return [
+            {
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                "hour": r.hour_of_day if r.hour_of_day is not None else (r.timestamp.hour if r.timestamp else 0),
+                "day_of_week": r.day_of_week if r.day_of_week is not None else (r.timestamp.weekday() if r.timestamp else 0),
+                "vehicle_count": r.vehicle_count,
+                "avg_speed": r.avg_speed,
+                "free_flow_speed": r.free_flow_speed,
+                "speed_ratio": r.speed_ratio,
+                "congestion_level": r.congestion_level or ("critical" if r.speed_ratio and r.speed_ratio < 0.4 else "high" if r.speed_ratio and r.speed_ratio < 0.7 else "medium" if r.speed_ratio and r.speed_ratio < 0.9 else "low"),
+                "data_available": True,
+                "data_source": "tomtom_observation",
+            }
+            for r in records
+        ]
 
-    return results
+    return {
+        "data_available": False,
+        "data_source": "unavailable",
+        "reason": "Real historical traffic observations are not available yet",
+        "results": [],
+    }
 
 
 @router.get("/heatmap")
-async def get_traffic_heatmap(current_user=Depends(get_current_user)):
-    """Get traffic density heatmap data points across Bangalore."""
-    now = datetime.now()
+async def get_traffic_heatmap(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get traffic density heatmap data points across Bangalore from real observations."""
+    cutoff = datetime.now() - timedelta(hours=24)
+    records = (
+        db.query(TrafficData)
+        .filter(TrafficData.is_test == False, TrafficData.timestamp >= cutoff)
+        .order_by(TrafficData.timestamp.desc())
+        .limit(200)
+        .all()
+    )
+
     points = []
-
-    # Generate points around each junction
-    for jid, info in JUNCTIONS.items():
-        traffic = simulate_traffic(jid, now.hour, now.weekday())
-        intensity = min(1.0, traffic["vehicle_count"] / 500)
-
-        # Add cluster of points around the junction
-        for _ in range(random.randint(5, 15)):
+    for r in records:
+        if r.latitude and r.longitude and r.speed_ratio is not None:
+            intensity = round(1.0 - float(r.speed_ratio), 3)
             points.append({
-                "lat": info["lat"] + random.uniform(-0.008, 0.008),
-                "lng": info["lng"] + random.uniform(-0.008, 0.008),
-                "intensity": round(intensity * random.uniform(0.6, 1.0), 3),
+                "lat": r.latitude,
+                "lng": r.longitude,
+                "intensity": max(0.1, min(1.0, intensity)),
+                "data_source": "tomtom_observation",
             })
-
-    # Add random road points
-    for _ in range(50):
-        points.append({
-            "lat": random.uniform(12.85, 13.08),
-            "lng": random.uniform(77.48, 77.78),
-            "intensity": round(random.uniform(0.1, 0.5), 3),
-        })
 
     return points
 

@@ -25,14 +25,42 @@ DEFAULT_WEIGHTS = {
 
 
 
+def compute_authoritative_eta(
+    duration_min: float,
+    traffic_delay_minutes: float = 0.0,
+    hazard_delay_minutes: float = 0.0,
+) -> Dict[str, float]:
+    """
+    Computes mathematically consistent authoritative ETA components.
+    Guarantees:
+      duration_min = base OSRM duration in minutes
+      traffic_delay_minutes = delay from real TomTom flow / LSTM
+      hazard_delay_minutes = delay from active road hazards
+      expected_delay_minutes = traffic_delay_minutes + hazard_delay_minutes
+      eta_minutes = duration_min + expected_delay_minutes
+    """
+    base = round(max(0.0, float(duration_min or 0.0)), 1)
+    traffic = round(max(0.0, float(traffic_delay_minutes or 0.0)), 1)
+    hazard = round(max(0.0, float(hazard_delay_minutes or 0.0)), 1)
+    expected_delay = round(traffic + hazard, 1)
+    eta = round(base + expected_delay, 1)
+    return {
+        "duration_min": base,
+        "traffic_delay_minutes": traffic,
+        "hazard_delay_minutes": hazard,
+        "expected_delay_minutes": expected_delay,
+        "eta_minutes": eta,
+    }
+
+
 def optimize_candidate_routes(
     db: Session,
     routes: List[Dict[str, Any]],
     weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
-    Phase 4 + Phase 5: Optimizes and scores candidate routes using safety, traffic intelligence
-    (TomTom Flow + LSTM/hour-pattern predictions), relative ETA, and distance.
+    Phase 4 + Phase 5 + Phase 12: Optimizes and scores candidate routes using safety, traffic intelligence
+    (TomTom Flow + LSTM predictions), relative ETA, and distance.
     Returns detailed route evaluations and a recommended route with dynamic reasons.
     """
     if not routes:
@@ -53,14 +81,10 @@ def optimize_candidate_routes(
     durations = []
     distances = []
 
-    # Run the async traffic intelligence in a sync context
-    # (FastAPI route handlers are async, but SQLAlchemy ops inside are sync;
-    #  we bridge with asyncio.run only when there is no running event loop)
     def _get_traffic(waypoints, distance_km, duration_min):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # Called from an already-running event loop (async route handler)
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     future = pool.submit(
@@ -85,15 +109,14 @@ def optimize_candidate_routes(
                     )
                 )
         except Exception:
-            # Final safety fallback — return neutral score
             return {
                 "traffic_score": 70.0,
                 "current_traffic_score": 70.0,
                 "predicted_traffic_score": None,
                 "traffic_level": "Moderate",
                 "predicted_congestion": None,
-                "expected_delay_minutes": None,
-                "traffic_source": "fallback",
+                "expected_delay_minutes": 0.0,
+                "traffic_source": "unavailable",
                 "traffic_confidence": 0.0,
                 "prediction_available": False,
                 "prediction_horizon_minutes": 30,
@@ -123,25 +146,25 @@ def optimize_candidate_routes(
         current_traffic_score = ti["current_traffic_score"]
         predicted_traffic_score = ti["predicted_traffic_score"]
         predicted_congestion = ti["predicted_congestion"]
-        expected_delay_minutes = ti["expected_delay_minutes"]
+        traffic_delay_raw = float(ti.get("expected_delay_minutes") or 0.0)
         traffic_source = ti["traffic_source"]
         traffic_confidence = ti["traffic_confidence"]
         prediction_available = ti["prediction_available"]
         prediction_horizon_minutes = ti["prediction_horizon_minutes"]
 
-        # Extract active hazards and delays
+        # Extract active hazards and hazard delay
         active_hazards_count = int(safety_res.get("active_hazards_nearby", 0))
         live_hazards_list = safety_res.get("live_hazards", [])
-        hazard_delay = float(safety_res.get("live_hazard_delay_minutes", 0.0))
+        hazard_delay_raw = float(safety_res.get("live_hazard_delay_minutes", 0.0))
 
-        # Update expected delay and ETA to include both traffic and live hazard delays.
-        # Keep traffic_delay and hazard_delay as separate named fields so the frontend
-        # can display them individually without any risk of double-counting.
-        traffic_delay = round(expected_delay_minutes or 0.0, 1)
-        hazard_delay = round(hazard_delay, 1)
-        total_delay = round(traffic_delay + hazard_delay, 1)
-        eta_minutes = round(duration_min + total_delay, 1)
+        # Authoritative ETA calculation (single backend source of truth)
+        eta_data = compute_authoritative_eta(
+            duration_min=duration_min,
+            traffic_delay_minutes=traffic_delay_raw,
+            hazard_delay_minutes=hazard_delay_raw,
+        )
 
+        eta_minutes = eta_data["eta_minutes"]
         durations.append(eta_minutes if eta_minutes > 0 else 1.0)
         distances.append(distance_km if distance_km > 0 else 1.0)
 
@@ -149,13 +172,11 @@ def optimize_candidate_routes(
             "route_id": route_id,
             "route_type": route_type,
             "distance_km": distance_km,
-            "duration_min": duration_min,
-            # ETA = base duration + traffic delay + hazard delay (authoritative, no frontend re-calc)
-            "eta_minutes": eta_minutes,
-            # Split delay components — frontend MUST display these directly, never re-add them
-            "traffic_delay_minutes": traffic_delay,
-            "hazard_delay_minutes": hazard_delay,
-            "expected_delay_minutes": total_delay,  # Combined total; kept for backwards compat
+            "duration_min": eta_data["duration_min"],
+            "traffic_delay_minutes": eta_data["traffic_delay_minutes"],
+            "hazard_delay_minutes": eta_data["hazard_delay_minutes"],
+            "expected_delay_minutes": eta_data["expected_delay_minutes"],
+            "eta_minutes": eta_data["eta_minutes"],
             "waypoints": waypoints,
             "safety_score": safety_score,
             "accident_risk_score": accident_risk_score,
@@ -164,7 +185,7 @@ def optimize_candidate_routes(
             "hotspots": hotspots,
             "active_hazards_nearby": active_hazards_count,
             "live_hazards": live_hazards_list,
-            # Phase 5 traffic intelligence fields
+            # Traffic intelligence fields
             "traffic_score": traffic_score,
             "current_traffic_score": current_traffic_score,
             "predicted_traffic_score": predicted_traffic_score,

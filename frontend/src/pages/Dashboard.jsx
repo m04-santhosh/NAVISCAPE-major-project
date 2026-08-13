@@ -119,10 +119,12 @@ export default function Dashboard() {
                   <HiLocationMarker className="w-4 h-4 text-primary-400" />
                   <div>
                     <p className="text-sm font-medium text-surface-200">{t.junction_name}</p>
-                    <p className="text-xs text-surface-500">{t.vehicle_count} vehicles · {t.avg_speed} km/h</p>
+                    <p className="text-xs text-surface-500">
+                      {t.data_available ? `${t.vehicle_count || 0} vehicles · ${t.avg_speed ? t.avg_speed.toFixed(1) + ' km/h' : 'Speed N/A'}` : 'Data unavailable'}
+                    </p>
                   </div>
                 </div>
-                {congestionBadge(t.congestion_level)}
+                {t.data_available ? congestionBadge(t.congestion_level) : <span className="badge bg-surface-800 text-surface-400 border border-surface-700 text-xs">Unavailable</span>}
               </div>
             ))}
           </div>

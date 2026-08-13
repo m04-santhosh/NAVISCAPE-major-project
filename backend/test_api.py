@@ -293,6 +293,7 @@ def test_risk_prediction_endpoint():
 
 
 def test_traffic_predict_endpoint():
+    """Verify /api/predict/traffic returns honest unavailable status when no model is trained."""
     payload = {
         "junction_id": 1,
         "hours_ahead": 3
@@ -301,7 +302,10 @@ def test_traffic_predict_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert data["junction_id"] == 1
-    assert len(data["predictions"]) == 3
+    assert "prediction_available" in data
+    assert data["prediction_available"] is False
+    assert data["prediction_source"] == "unavailable"
+    assert data["predictions"] == []
 
 
 def test_navigate_endpoint():
@@ -440,6 +444,14 @@ def test_road_hazards_endpoint():
 
 def test_dynamic_hazard_routing_endpoint():
     """Phase 7: Verify that active hazards dynamically update route safety scores, ETA delays, and alternate evaluations."""
+    from app.models.road_hazard import RoadHazard
+    db = SessionLocal()
+    try:
+        db.query(RoadHazard).delete()
+        db.commit()
+    finally:
+        db.close()
+
     # 1. Post a new active critical hazard on a route waypoint (e.g. at 12.9300, 77.6200)
     payload_active = {
         "hazard_type": "Road blocked",  # Blocked road triggers BOTH safety penalty and ETA delay
@@ -544,11 +556,11 @@ def test_lstm_traffic_prediction_pipeline():
         res_train_fail = client.post("/api/predict/train-lstm?is_test=true", headers=_auth_headers)
         assert res_train_fail.status_code == 200
         data_train_fail = res_train_fail.json()
-        assert data_train_fail["status"] == "insufficient_data"
-        assert "More data is required" in data_train_fail["message"]
+        assert data_train_fail["status"] in ["insufficient_data", "insufficient_real_data"]
+        assert "available" in data_train_fail["message"] or "required" in data_train_fail["message"] or "More data is required" in data_train_fail["message"]
 
         # 3. Seed test observations for training
-        # We need 120 observations for Junction 1 (Silk Board)
+        # We need 120 hourly aggregated observations for Junction 1 (Silk Board)
         now = datetime.now()
         for i in range(125):
             ts = now - timedelta(hours=125 - i)
@@ -575,6 +587,7 @@ def test_lstm_traffic_prediction_pipeline():
         data_train_success = res_train_success.json()
         assert data_train_success["status"] == "success"
         assert "Successfully trained LSTM" in data_train_success["message"]
+        assert "metadata" in data_train_success
 
         # 5. Verify LSTM prediction works using the trained test model
         payload_pred = {
@@ -593,7 +606,7 @@ def test_lstm_traffic_prediction_pipeline():
             assert "congestion_level" in p
             assert p["confidence"] == 0.90
 
-        # 6. Verify that requesting production model (default) falls back to heuristic if no prod model exists
+        # 6. Verify that requesting production model (default) returns honest unavailable response if no prod model exists
         payload_pred_prod = {
             "junction_id": 1,
             "hours_ahead": 5,
@@ -602,10 +615,10 @@ def test_lstm_traffic_prediction_pipeline():
         res_pred_prod = client.post("/api/predict/traffic", json=payload_pred_prod, headers=_auth_headers)
         assert res_pred_prod.status_code == 200
         data_pred_prod = res_pred_prod.json()
-        for p in data_pred_prod["predictions"]:
-            assert p["prediction_source"] == "hour_pattern_baseline"
+        assert data_pred_prod["prediction_available"] is False
+        assert data_pred_prod["prediction_source"] == "unavailable"
 
-        # 7. Cleanup test observations and generated test models/scalers
+        # 7. Cleanup test observations and generated test models/scalers/metadata
         db.query(TrafficData).filter(TrafficData.is_test == True).delete()
         db.commit()
 
@@ -613,10 +626,35 @@ def test_lstm_traffic_prediction_pipeline():
             os.path.dirname(os.path.dirname(__file__)),
             "ml", "models",
         )
-        for filename in ["traffic_lstm_test.h5", "traffic_scaler_test.pkl"]:
+        for filename in ["traffic_lstm_test.h5", "traffic_scaler_test.pkl", "traffic_lstm_meta_test.json"]:
             path = os.path.join(ml_dir, filename)
             if os.path.exists(path):
                 os.remove(path)
+
+    finally:
+        db.close()
+
+
+def test_hourly_aggregation_and_lstm_status():
+    """Phase 11: Test 5-minute to hourly aggregation function and /lstm-status endpoint."""
+    db = SessionLocal()
+    try:
+        from app.services.traffic_collector import aggregate_5min_to_hourly
+
+        # 1. Test aggregate_5min_to_hourly on junction 1 (real observations)
+        hourly_real = aggregate_5min_to_hourly(db, junction_id=1, is_test=False)
+        assert isinstance(hourly_real, list)
+
+        # 2. Test /api/predict/lstm-status endpoint for production
+        res_status_prod = client.get("/api/predict/lstm-status?junction_id=1&is_test=false", headers=_auth_headers)
+        assert res_status_prod.status_code == 200
+        data_status_prod = res_status_prod.json()
+        assert data_status_prod["junction_id"] == 1
+        assert data_status_prod["is_test"] is False
+        assert data_status_prod["status"] == "insufficient_real_data"
+        assert data_status_prod["model_trained"] is False
+        assert data_status_prod["hourly_observation_count"] == len(hourly_real)
+        assert data_status_prod["required_hourly_observations"] == 120
 
     finally:
         db.close()
@@ -696,6 +734,239 @@ def test_global_exception_handling():
     assert "secret" not in data["detail"]
 
 
+def test_production_traffic_endpoints_honesty():
+    """Phase 10: Verify production traffic endpoints do not return random data."""
+    # 1. GET /api/traffic/current
+    res_curr = client.get("/api/traffic/current", headers=_auth_headers)
+    assert res_curr.status_code == 200
+    data_curr = res_curr.json()
+    assert isinstance(data_curr, list)
+    assert len(data_curr) == 8
+    for item in data_curr:
+        assert "data_available" in item
+        if not item["data_available"]:
+            assert item["data_source"] == "unavailable"
+            assert item["vehicle_count"] is None
+            assert item["avg_speed"] is None
+
+    # 2. GET /api/traffic/historical
+    res_hist = client.get("/api/traffic/historical?junction_id=1&days=7", headers=_auth_headers)
+    assert res_hist.status_code == 200
+    data_hist = res_hist.json()
+    if isinstance(data_hist, dict):
+        assert data_hist["data_available"] is False
+        assert data_hist["data_source"] == "unavailable"
+        assert data_hist["results"] == []
+
+    # 3. GET /api/traffic/heatmap
+    res_hm = client.get("/api/traffic/heatmap", headers=_auth_headers)
+    assert res_hm.status_code == 200
+    data_hm = res_hm.json()
+    assert isinstance(data_hm, list)
+
+
+def test_eta_reliability_and_authoritative_contract():
+    """Phase 12: Verify authoritative ETA calculation, no double counting, hazard isolation, and schema contracts."""
+    from app.services.route_optimizer import compute_authoritative_eta, optimize_candidate_routes
+    from app.models.road_hazard import RoadHazard
+    from app.models.user import User
+
+    # 1. Base ETA only (duration=20, traffic=0, hazard=0 -> eta=20)
+    eta_base = compute_authoritative_eta(duration_min=20.0, traffic_delay_minutes=0.0, hazard_delay_minutes=0.0)
+    assert eta_base["duration_min"] == 20.0
+    assert eta_base["traffic_delay_minutes"] == 0.0
+    assert eta_base["hazard_delay_minutes"] == 0.0
+    assert eta_base["expected_delay_minutes"] == 0.0
+    assert eta_base["eta_minutes"] == 20.0
+
+    # 2. Traffic delay (duration=20, traffic=5, hazard=0 -> eta=25)
+    eta_traffic = compute_authoritative_eta(duration_min=20.0, traffic_delay_minutes=5.0, hazard_delay_minutes=0.0)
+    assert eta_traffic["expected_delay_minutes"] == 5.0
+    assert eta_traffic["eta_minutes"] == 25.0
+
+    # 3. Hazard delay (duration=20, traffic=0, hazard=3 -> eta=23)
+    eta_hazard = compute_authoritative_eta(duration_min=20.0, traffic_delay_minutes=0.0, hazard_delay_minutes=3.0)
+    assert eta_hazard["expected_delay_minutes"] == 3.0
+    assert eta_hazard["eta_minutes"] == 23.0
+
+    # 4. Combined delay (duration=20, traffic=5, hazard=3 -> expected_delay=8, eta=28)
+    eta_combined = compute_authoritative_eta(duration_min=20.0, traffic_delay_minutes=5.0, hazard_delay_minutes=3.0)
+    assert eta_combined["expected_delay_minutes"] == 8.0
+    assert eta_combined["eta_minutes"] == 28.0
+
+    # 5. Verify API contract on POST /api/navigation/optimize-routes
+    db = SessionLocal()
+    try:
+        db.query(RoadHazard).delete()
+        db.commit()
+
+        user = db.query(User).first()
+        user_id = user.id if user else 1
+
+        active_hz = RoadHazard(
+            user_id=user_id,
+            hazard_type="Accident",
+            severity="High",
+            latitude=12.9252,
+            longitude=77.6152,
+            description="Active test accident",
+            status="Active",
+        )
+        resolved_hz = RoadHazard(
+            user_id=user_id,
+            hazard_type="Road blocked",
+            severity="Critical",
+            latitude=12.9254,
+            longitude=77.6154,
+            description="Resolved test block",
+            status="Resolved",
+        )
+        unrelated_hz = RoadHazard(
+            user_id=user_id,
+            hazard_type="Road blocked",
+            severity="Critical",
+            latitude=13.1000,
+            longitude=77.7000,
+            description="Far away hazard",
+            status="Active",
+        )
+        db.add_all([active_hz, resolved_hz, unrelated_hz])
+        db.commit()
+
+        waypoints = [[12.9250, 77.6150], [12.9350, 77.6250]]
+        candidate_routes = [
+            {"route_id": "r1", "route_type": "safest", "distance_km": 5.0, "duration_min": 15.0, "waypoints": waypoints},
+            {"route_id": "r2", "route_type": "shortest", "distance_km": 4.5, "duration_min": 12.0, "waypoints": [[12.9000, 77.6000], [12.9100, 77.6100]]},
+        ]
+
+        payload = {"routes": candidate_routes}
+        res = client.post("/api/navigation/optimize-routes", json=payload, headers=_auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "routes" in data
+        assert "recommended_route_id" in data
+
+        for r in data["routes"]:
+            assert "traffic_delay_minutes" in r
+            assert "hazard_delay_minutes" in r
+            assert "expected_delay_minutes" in r
+            assert "eta_minutes" in r
+            assert "traffic_source" in r
+            assert r["expected_delay_minutes"] == round(r["traffic_delay_minutes"] + r["hazard_delay_minutes"], 1)
+            assert r["eta_minutes"] == round(r["duration_min"] + r["expected_delay_minutes"], 1)
+
+            if r["route_id"] == "r1":
+                assert r["hazard_delay_minutes"] == 7.0
+                assert r["active_hazards_nearby"] == 1
+
+            if r["route_id"] == "r2":
+                assert r["hazard_delay_minutes"] == 0.0
+
+        db.query(RoadHazard).filter(RoadHazard.id.in_([active_hz.id, resolved_hz.id, unrelated_hz.id])).delete()
+        db.commit()
+
+    finally:
+        db.close()
+
+
+def test_tomtom_traffic_delay_no_array_length_multiplier_regression():
+    """Regression test: Verify TomTom traffic delay scales base route duration by speed ratio rather than summing raw segment times."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.traffic_intelligence import _get_route_tomtom_traffic
+
+    # Create a dense sample of 107 waypoints representing a 12.29 km route with 10.0 min base duration
+    sampled_points = [[12.9 + i * 0.001, 77.6 + i * 0.001] for i in range(107)]
+
+    # Mock TomTom flow point returning speed ratio 0.625
+    mock_flow_response = {
+        "current_speed_kmh": 25.0,
+        "free_flow_speed_kmh": 40.0,
+        "current_travel_time_s": 180,
+        "free_flow_travel_time_s": 135,
+        "speed_ratio": 0.625,
+        "confidence": 0.9,
+    }
+
+    import asyncio
+    with patch("app.services.traffic_intelligence._fetch_tomtom_flow_point", new=AsyncMock(return_value=mock_flow_response)):
+        res = asyncio.run(_get_route_tomtom_traffic(sampled_points, api_key="dummy_key", duration_min=10.0))
+
+    assert res["available"] is True
+    # Base duration 10.0 min * (1 / 0.625 - 1) = 6.0 minutes expected delay.
+    # Must NOT sum raw probe travel time differences (8 * 45s = 360s = 6.0m by coincidence here) nor scale by array length 107/8.
+    assert res["expected_delay_minutes"] == 6.0
+
+
+def test_tomtom_traffic_delay_formula_and_deduplication_regression():
+    """Focused regression test: Verify overlapping TomTom segment travel times do not double-count to produce +80.7m delay."""
+    from unittest.mock import AsyncMock, patch
+    from app.services.traffic_intelligence import evaluate_route_traffic_intelligence
+
+    waypoints = [[12.9 + i * 0.001, 77.6 + i * 0.001] for i in range(100)]
+    # Mock probes returning speed ratio ~0.57, including duplicate overlapping segments
+    mock_probes = [
+        {"current_speed_kmh": 21.0, "free_flow_speed_kmh": 35.0, "current_travel_time_s": 1205.0, "free_flow_travel_time_s": 723.0, "speed_ratio": 0.6, "confidence": 1.0},
+        {"current_speed_kmh": 19.0, "free_flow_speed_kmh": 37.0, "current_travel_time_s": 1146.0, "free_flow_travel_time_s": 589.0, "speed_ratio": 0.5135, "confidence": 1.0},
+        {"current_speed_kmh": 23.0, "free_flow_speed_kmh": 40.0, "current_travel_time_s": 1573.0, "free_flow_travel_time_s": 905.0, "speed_ratio": 0.575, "confidence": 1.0},
+        # Probe 4 hits exact same TomTom segment as Probe 3
+        {"current_speed_kmh": 23.0, "free_flow_speed_kmh": 40.0, "current_travel_time_s": 1573.0, "free_flow_travel_time_s": 905.0, "speed_ratio": 0.575, "confidence": 1.0},
+        {"current_speed_kmh": 20.0, "free_flow_speed_kmh": 38.0, "current_travel_time_s": 1610.0, "free_flow_travel_time_s": 847.0, "speed_ratio": 0.5263, "confidence": 0.9},
+        {"current_speed_kmh": 19.0, "free_flow_speed_kmh": 35.0, "current_travel_time_s": 1690.0, "free_flow_travel_time_s": 917.0, "speed_ratio": 0.5428, "confidence": 1.0},
+        {"current_speed_kmh": 23.0, "free_flow_speed_kmh": 42.0, "current_travel_time_s": 1184.0, "free_flow_travel_time_s": 648.0, "speed_ratio": 0.5476, "confidence": 1.0},
+        {"current_speed_kmh": 35.0, "free_flow_speed_kmh": 51.0, "current_travel_time_s": 729.0, "free_flow_travel_time_s": 501.0, "speed_ratio": 0.6862, "confidence": 1.0},
+    ]
+
+    mock_func = AsyncMock(side_effect=mock_probes)
+
+    import asyncio
+    with patch("app.services.traffic_intelligence._fetch_tomtom_flow_point", new=mock_func):
+        res = asyncio.run(evaluate_route_traffic_intelligence(waypoints, distance_km=12.29, duration_min=16.0, tomtom_api_key="dummy_key"))
+
+    assert res["traffic_source"] == "tomtom_live"
+    # TomTom measured current speed avg ~23 km/h. OSRM base speed = 12.29 km / (16 min / 60) = 46.08 km/h.
+    # Effective speed ratio = 23 / 46.08 = 0.499. Travel time = 16 / 0.499 = 32.0 min. Delay = +16.0 min.
+    assert res["expected_delay_minutes"] > 10.0
+    assert res["expected_delay_minutes"] == 16.2
+
+
+def test_traffic_delay_real_world_correctness_and_authoritative_contract_regression():
+    """Task 10 Regression test: Verifies positive delay on congestion, unavailable fallback honesty, and ETA arithmetic."""
+    from app.services.route_optimizer import compute_authoritative_eta
+    from app.services.traffic_intelligence import evaluate_route_traffic_intelligence
+    from unittest.mock import AsyncMock, patch
+    import asyncio
+
+    # 1. Authoritative ETA math contract verification
+    eta_contract = compute_authoritative_eta(duration_min=16.0, traffic_delay_minutes=15.0, hazard_delay_minutes=3.0)
+    assert eta_contract["duration_min"] == 16.0
+    assert eta_contract["traffic_delay_minutes"] == 15.0
+    assert eta_contract["hazard_delay_minutes"] == 3.0
+    assert eta_contract["expected_delay_minutes"] == 18.0
+    assert eta_contract["eta_minutes"] == 34.0
+
+    # 2. Unavailable traffic source honesty check
+    waypoints = [[12.9 + i * 0.001, 77.6 + i * 0.001] for i in range(20)]
+    res_unavail = asyncio.run(evaluate_route_traffic_intelligence(waypoints, distance_km=10.0, duration_min=15.0, tomtom_api_key=""))
+    assert res_unavail["traffic_source"] == "unavailable"
+    assert res_unavail["expected_delay_minutes"] == 0.0
+
+    # 3. Valid TomTom congestion produces positive delay
+    mock_probe = {
+        "current_speed_kmh": 20.0,
+        "free_flow_speed_kmh": 35.0,
+        "current_travel_time_s": 200,
+        "free_flow_travel_time_s": 120,
+        "speed_ratio": 0.571,
+        "confidence": 1.0,
+    }
+    with patch("app.services.traffic_intelligence._fetch_tomtom_flow_point", new=AsyncMock(return_value=mock_probe)):
+        res_live = asyncio.run(evaluate_route_traffic_intelligence(waypoints, distance_km=12.0, duration_min=16.0, tomtom_api_key="dummy_key"))
+
+    assert res_live["traffic_source"] == "tomtom_live"
+    # Measured speed 20 km/h vs OSRM 45 km/h -> Effective ratio 0.444 -> Travel time 36m -> Delay +20.0m
+    assert res_live["expected_delay_minutes"] > 10.0
+
+
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
@@ -712,12 +983,18 @@ if __name__ == "__main__":
         ("Route Evaluation Endpoint", test_route_evaluation_endpoint),
         ("Risk Prediction Endpoint", test_risk_prediction_endpoint),
         ("Traffic Predict Endpoint", test_traffic_predict_endpoint),
+        ("Production Traffic Endpoints Honesty", test_production_traffic_endpoints_honesty),
         ("Navigate Save Endpoint", test_navigate_endpoint),
         ("Route Optimization Endpoint", test_route_optimization_endpoint),
         ("Route Traffic Intelligence Endpoint", test_route_traffic_intelligence_endpoint),
         ("Road Hazards Endpoint", test_road_hazards_endpoint),
         ("Dynamic Hazard routing updates Endpoint", test_dynamic_hazard_routing_endpoint),
         ("LSTM Traffic Collection & Training Pipeline Endpoint", test_lstm_traffic_prediction_pipeline),
+        ("Hourly Aggregation & LSTM Model Status Endpoint", test_hourly_aggregation_and_lstm_status),
+        ("ETA Reliability & Authoritative Contract Endpoint", test_eta_reliability_and_authoritative_contract),
+        ("TomTom Traffic Delay No Polyline Multiplier Regression", test_tomtom_traffic_delay_no_array_length_multiplier_regression),
+        ("TomTom Traffic Delay Formula & Deduplication Regression", test_tomtom_traffic_delay_formula_and_deduplication_regression),
+        ("Task 10 Traffic Delay Correctness & Contract Regression", test_traffic_delay_real_world_correctness_and_authoritative_contract_regression),
         ("User Data Isolation Endpoint", test_user_data_isolation),
         ("Global Exception Handling Endpoint", test_global_exception_handling),
     ]

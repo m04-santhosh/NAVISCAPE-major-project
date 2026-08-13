@@ -60,27 +60,41 @@ async def predict_traffic(
     preds = predict_traffic_lstm(db, data.junction_id, data.hours_ahead, use_test_model=bool(data.use_test_model))
     
     if preds is not None:
-        return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
+        return TrafficPredictionResponse(
+            junction_id=data.junction_id,
+            predictions=preds,
+            prediction_available=True,
+            prediction_source="lstm_model",
+            reason=None,
+        )
         
-    # Heuristic fallback (clearly labeled)
-    now = datetime.now()
-    preds = []
-    for i in range(data.hours_ahead):
-        h = (now.hour + i) % 24
-        c = _predict_count(data.junction_id, h)
-        preds.append({
-            "hour": h,
-            "timestamp": (now + timedelta(hours=i)).isoformat(),
-            "predicted_vehicle_count": c,
-            "congestion_level": _level(c),
-            "confidence": 0.85,
-            "prediction_source": "hour_pattern_baseline",
-        })
-    return TrafficPredictionResponse(junction_id=data.junction_id, predictions=preds)
+    return TrafficPredictionResponse(
+        junction_id=data.junction_id,
+        predictions=[],
+        prediction_available=False,
+        prediction_source="unavailable",
+        reason="Real traffic observations or trained LSTM model are unavailable",
+    )
+
+
+@router.get("/lstm-status")
+async def get_lstm_status(
+    junction_id: int = 1,
+    is_test: bool = False,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the current training, observation count, and availability status of the LSTM model.
+    Does not expose raw filesystem paths or credentials.
+    """
+    from ..services.traffic_collector import get_lstm_model_status
+    return get_lstm_model_status(db, junction_id=junction_id, use_test_model=is_test)
 
 
 @router.post("/train-lstm")
 async def trigger_lstm_training(
+    junction_id: int = 1,
     is_test: bool = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -91,18 +105,22 @@ async def trigger_lstm_training(
     Otherwise, trains on real TomTom data and saves to the production model.
     """
     from ..services.traffic_collector import train_lstm_from_db
-    res = train_lstm_from_db(db, is_test=is_test)
-    if res["trained"]:
+    res = train_lstm_from_db(db, junction_id=junction_id, is_test=is_test)
+    if res.get("trained"):
         return {
             "status": "success",
             "message": res["message"],
-            "observation_count": res["observation_count"],
+            "junction_id": junction_id,
+            "hourly_observation_count": res.get("hourly_observation_count", 0),
+            "metadata": res.get("metadata"),
         }
     else:
         return {
-            "status": "insufficient_data",
+            "status": res.get("status", "insufficient_data"),
             "message": res["reason"],
-            "observation_count": res["observation_count"],
+            "junction_id": junction_id,
+            "hourly_observation_count": res.get("hourly_observation_count", 0),
+            "required_hourly_observations": res.get("required_hourly_observations", 120),
         }
 
 @router.post("/risk", response_model=RiskPredictionResponse)
@@ -189,18 +207,39 @@ async def predict_risk(
     )
 
 @router.get("/congestion-forecast")
-async def get_congestion_forecast(current_user=Depends(get_current_user)):
+async def get_congestion_forecast(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.traffic_collector import predict_traffic_lstm
     forecasts = []
     for jid, name in JUNCTION_NAMES.items():
-        jf = [
-            {
-                "hour": h,
-                "vehicle_count": _predict_count(jid, h),
-                "congestion_level": _level(_predict_count(jid, h)),
-            }
-            for h in range(24)
-        ]
-        forecasts.append({"junction_id": jid, "junction_name": name, "forecasts": jf})
+        preds = predict_traffic_lstm(db, jid, 24, use_test_model=False)
+        if preds is not None:
+            jf = [
+                {
+                    "hour": p["hour"],
+                    "vehicle_count": p["predicted_vehicle_count"],
+                    "congestion_level": p["congestion_level"],
+                }
+                for p in preds
+            ]
+            forecasts.append({
+                "junction_id": jid,
+                "junction_name": name,
+                "prediction_available": True,
+                "prediction_source": "lstm_model",
+                "forecasts": jf,
+            })
+        else:
+            forecasts.append({
+                "junction_id": jid,
+                "junction_name": name,
+                "prediction_available": False,
+                "prediction_source": "unavailable",
+                "reason": "Real traffic observations or trained LSTM model are unavailable",
+                "forecasts": [],
+            })
     return forecasts
 
 @router.get("/accident-heatmap")

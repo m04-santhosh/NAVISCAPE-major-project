@@ -59,17 +59,12 @@ function processOSRMRoutes(osrmRoutes) {
     const distanceKm = +(route.distance / 1000).toFixed(2);
     const durationMin = +(route.duration / 60).toFixed(1);
 
-    let safetyScore;
-    if (i === 0) safetyScore = +(55 + Math.random() * 15).toFixed(1);
-    else if (i === sorted.length - 1) safetyScore = +(82 + Math.random() * 16).toFixed(1);
-    else safetyScore = +(68 + Math.random() * 18).toFixed(1);
-
     return {
       route_type: type,
       label: ROUTE_LABELS[type],
       distance_km: distanceKm,
       duration_min: durationMin,
-      safety_score: safetyScore,
+      safety_score: null,
       waypoints,
     };
   });
@@ -424,14 +419,14 @@ export default function Navigation() {
               });
               return {
                 ...r,
-                safety_score: evalRes.data.empirical_safety_score ?? r.safety_score,
+                safety_score: evalRes.data.empirical_safety_score ?? null,
                 total_accidents_nearby: evalRes.data.total_accidents_nearby,
                 fatal_accidents_nearby: evalRes.data.fatal_accidents_nearby,
                 hotspots: evalRes.data.hotspots || [],
                 eta_minutes: r.duration_min,
               };
             } catch (e) {
-              return { ...r, eta_minutes: r.duration_min };
+              return { ...r, safety_score: null, eta_minutes: r.duration_min };
             }
           })
         );
@@ -577,12 +572,15 @@ export default function Navigation() {
 
     if (selectedRoute?.waypoints?.length > 1) {
       const totalWp = selectedRoute.waypoints.length;
-      const pct = (nearestIdx / (totalWp - 1)) * 100;
-      const baseEta = selectedRoute.eta_minutes ?? selectedRoute.duration_min;
+      const rawPct = (nearestIdx / (totalWp - 1)) * 100;
+      const pct = Math.min(100, Math.max(0, rawPct));
+      const baseEta = selectedRoute.eta_minutes ?? selectedRoute.duration_min ?? 0;
       
-      setNavProgress(pct);
-      setNavDistLeft(+(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
-      setNavETA(+((baseEta) * (1 - pct / 100)).toFixed(1));
+      setNavProgress(Math.round(pct));
+      const remDist = Math.max(0, +(selectedRoute.distance_km * (1 - pct / 100)).toFixed(2));
+      const remETA = Math.max(0, +((baseEta) * (1 - pct / 100)).toFixed(1));
+      setNavDistLeft(remDist);
+      setNavETA(remETA);
 
       if (nearestIdx < totalWp - 1) {
         const dir = turnDirection(
@@ -593,7 +591,7 @@ export default function Navigation() {
         setNavInstruction(dir);
       }
 
-      if (pct > 95) setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
+      if (pct >= 95) setNavInstruction({ icon: HiLocationMarker, text: 'Arriving at destination' });
     }
 
     // 500m Hotspot Proximity Alert Detection with Web Audio API chime
@@ -934,8 +932,8 @@ export default function Navigation() {
             <div className="grid grid-cols-4 gap-1.5 text-center text-xs">
               <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
                 <div className="text-[9px] text-surface-400 font-bold uppercase">Safety</div>
-                <div className={`font-black mt-0.5 ${recommendedRoute.safety_score >= 80 ? 'text-green-400' : recommendedRoute.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {recommendedRoute.safety_score}
+                <div className={`font-black mt-0.5 ${recommendedRoute.safety_score != null ? (recommendedRoute.safety_score >= 80 ? 'text-green-400' : recommendedRoute.safety_score >= 60 ? 'text-yellow-400' : 'text-red-400') : 'text-surface-500 text-[10px]'}`}>
+                  {recommendedRoute.safety_score != null ? recommendedRoute.safety_score : 'Safety score unavailable'}
                 </div>
               </div>
               <div className="bg-surface-800/70 p-2 rounded-xl border border-surface-700/50">
@@ -1035,7 +1033,7 @@ export default function Navigation() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-1 text-[10px] text-surface-400 border-t border-surface-700/40 pt-1">
-                  <div>Safety: <span className="font-semibold text-surface-200">{r.safety_score}</span></div>
+                  <div>Safety: <span className="font-semibold text-surface-200">{r.safety_score != null ? r.safety_score : 'Unavailable'}</span></div>
                   <div className={TRAFFIC_COLOR[r.traffic_level] || 'text-cyan-300'}>
                     {TRAFFIC_ICON[r.traffic_level] || '🟡'} {r.traffic_level || 'Mod'}
                   </div>
@@ -1171,7 +1169,7 @@ export default function Navigation() {
           {/* Alternative Routes (dimmed lines) */}
           {!isNavigating && routes.map((r, i) => (
             ((selectedRoute?.route_id && r.route_id) ? r.route_id !== selectedRoute.route_id : r.route_type !== selectedRoute?.route_type) && (
-              <g key={i}>
+              <div key={i}>
                 <Polyline
                   positions={r.waypoints}
                   pathOptions={{ color: '#000000', weight: 14, opacity: 0 }}
@@ -1182,13 +1180,13 @@ export default function Navigation() {
                   pathOptions={{ color: '#9aa0a6', weight: 4, opacity: 0.8 }}
                   eventHandlers={{ click: () => setSelectedRoute(r) }}
                 />
-              </g>
+              </div>
             )
           ))}
 
           {/* Selected Active Route */}
           {selectedRoute && (
-            <g>
+            <>
               <Polyline
                 positions={selectedRoute.waypoints}
                 pathOptions={{ color: '#1558b0', weight: isNavigating ? 10 : 8, opacity: 0.4 }}
@@ -1197,7 +1195,7 @@ export default function Navigation() {
                 positions={selectedRoute.waypoints}
                 pathOptions={{ color: '#4285F4', weight: isNavigating ? 6 : 5, opacity: 0.95 }}
               />
-            </g>
+            </>
           )}
 
           {/* Travelled path (green overlay during live nav) */}

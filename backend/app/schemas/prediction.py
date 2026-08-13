@@ -15,6 +15,9 @@ class TrafficPredictionRequest(BaseModel):
 class TrafficPredictionResponse(BaseModel):
     junction_id: int
     predictions: List[dict]  # [{hour, predicted_count, congestion_level}, ...]
+    prediction_available: bool = False
+    prediction_source: str = "unavailable"
+    reason: Optional[str] = None
 
 
 class RiskPredictionRequest(BaseModel):
