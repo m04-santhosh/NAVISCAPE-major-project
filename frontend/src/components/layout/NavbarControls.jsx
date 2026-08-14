@@ -8,8 +8,6 @@ import {
   HiUserCircle,
   HiLogout,
   HiChartBar,
-  HiHome,
-  HiInformationCircle,
   HiChevronDown,
   HiMap
 } from 'react-icons/hi';
@@ -79,10 +77,10 @@ export default function NavbarControls({ showTraffic, onToggleTraffic }) {
               <p className="text-[10px] text-cyan-400 font-medium mt-0.5">Verified NAVISCAPE User</p>
             </div>
 
-            {/* Secondary Pages Submenu (Kept accessible per requirement) */}
+            {/* App Views Submenu */}
             <div className="py-1 space-y-0.5">
               <div className="px-3 py-1 text-[10px] font-bold text-surface-500 uppercase tracking-wider">
-                Secondary Views
+                Application
               </div>
               <button
                 onClick={() => { navigate('/navigate'); setDropdownOpen(false); }}
@@ -91,22 +89,10 @@ export default function NavbarControls({ showTraffic, onToggleTraffic }) {
                 <HiMap className="w-4 h-4" /> Map Navigation
               </button>
               <button
-                onClick={() => { navigate('/dashboard'); setDropdownOpen(false); }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-surface-300 hover:text-surface-100 hover:bg-surface-800/80 transition-colors"
-              >
-                <HiHome className="w-4 h-4 text-surface-400" /> Dashboard Overview
-              </button>
-              <button
                 onClick={() => { navigate('/analytics'); setDropdownOpen(false); }}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-surface-300 hover:text-surface-100 hover:bg-surface-800/80 transition-colors"
               >
                 <HiChartBar className="w-4 h-4 text-surface-400" /> Analytics
-              </button>
-              <button
-                onClick={() => { navigate('/about'); setDropdownOpen(false); }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-surface-300 hover:text-surface-100 hover:bg-surface-800/80 transition-colors"
-              >
-                <HiInformationCircle className="w-4 h-4 text-surface-400" /> About
               </button>
             </div>
 

@@ -4,11 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import toast from 'react-hot-toast';
 import {
-  HiHome as IconHome,
   HiMap as IconMap,
   HiChartBar as IconAnalytics,
-  HiInformationCircle as IconAbout,
-  HiClock as IconHistory,
   HiShieldCheck as IconShield,
   HiChevronRight as IconRight,
   HiChevronLeft as IconLeft,
@@ -20,9 +17,7 @@ import {
 
 const navItems = [
   { to: '/navigate', icon: IconMap, label: 'Navigation' },
-  { to: '/dashboard', icon: IconHome, label: 'Dashboard' },
   { to: '/analytics', icon: IconAnalytics, label: 'Analytics' },
-  { to: '/dashboard', icon: IconHistory, label: 'Route History' },
   {
     to: '#women-safety',
     icon: IconShield,
@@ -30,7 +25,6 @@ const navItems = [
     isPlaceholder: true,
     badge: 'SOON'
   },
-  { to: '/about', icon: IconAbout, label: 'About' },
 ];
 
 export default function Sidebar() {

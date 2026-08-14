@@ -1,3 +1,7 @@
+/**
+ * [RETAINED / LEGACY COMPONENT]
+ * Dashboard.jsx is retained for internal reference and is not exposed in the active user-facing navigation.
+ */
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';

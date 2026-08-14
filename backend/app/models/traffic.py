@@ -3,13 +3,16 @@ Traffic Data ORM Model
 Stores historical and real-time traffic measurements at junctions.
 """
 
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, func, Boolean
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, func, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from ..database import Base
 
 
 class TrafficData(Base):
     __tablename__ = "traffic_data"
+    __table_args__ = (
+        UniqueConstraint("junction_id", "timestamp", name="uq_traffic_junction_timestamp"),
+    )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     junction_id = Column(Integer, nullable=False, index=True)
@@ -51,3 +54,24 @@ class RouteHistory(Base):
 
     def __repr__(self):
         return f"<RouteHistory(user={self.user_id}, type='{self.route_type}')>"
+
+
+class TrafficHourly(Base):
+    __tablename__ = "traffic_hourly"
+    __table_args__ = (
+        UniqueConstraint("junction_id", "timestamp", "is_test", name="uq_traffic_hourly_junction_time_test"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    junction_id = Column(Integer, nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    avg_speed = Column(Float, nullable=True)
+    speed_ratio = Column(Float, nullable=True)
+    avg_confidence = Column(Float, nullable=True)
+    sample_count = Column(Integer, nullable=False, default=0)
+    data_quality = Column(String(20), nullable=False)  # COMPLETE, PARTIAL, LOW_COVERAGE
+    is_test = Column(Boolean, default=False, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    def __repr__(self):
+        return f"<TrafficHourly(junction={self.junction_id}, time={self.timestamp}, quality={self.data_quality}, samples={self.sample_count})>"

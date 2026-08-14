@@ -30,7 +30,6 @@ export default function Home() {
             <Link to="/navigate" className="btn-primary text-lg px-8 py-4">
               Launch Navigation
             </Link>
-            <Link to="/about" className="btn-secondary text-lg px-8 py-4">About the Project</Link>
           </div>
         </div>
       </section>

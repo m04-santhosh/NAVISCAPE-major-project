@@ -20,17 +20,19 @@ L.Icon.Default.mergeOptions({
 
 const BANGALORE_CENTER = [12.9716, 77.5946];
 const PRESET_LOCATIONS = [
+  { name: 'MG Road', lat: 12.9756, lng: 77.6066 },
+  { name: 'MG Road Metro', lat: 12.9756, lng: 77.6066 },
   { name: 'Silk Board Junction', lat: 12.9170, lng: 77.6230 },
   { name: 'Hebbal Flyover', lat: 13.0358, lng: 77.5970 },
   { name: 'KR Puram Junction', lat: 13.0012, lng: 77.6960 },
   { name: 'Marathahalli Bridge', lat: 12.9591, lng: 77.7010 },
   { name: 'Whitefield Junction', lat: 12.9698, lng: 77.7500 },
-  { name: 'MG Road Metro', lat: 12.9756, lng: 77.6066 },
   { name: 'Koramangala', lat: 12.9352, lng: 77.6245 },
   { name: 'Electronic City', lat: 12.8440, lng: 77.6630 },
   { name: 'Indiranagar', lat: 12.9784, lng: 77.6408 },
   { name: 'Jayanagar', lat: 12.9260, lng: 77.5830 },
 ];
+
 const ROUTE_COLORS = { shortest: '#ef4444', safest: '#22c55e', balanced: '#06b6d4' };
 const ROUTE_LABELS = { shortest: 'Fastest Route', safest: 'Safest Route', balanced: 'Balanced Route' };
 
@@ -354,10 +356,19 @@ export default function Navigation() {
     }
   };
 
+  const clearRouteState = () => {
+    setRoutes([]);
+    setSelectedRoute(null);
+    setRecommendedRouteId(null);
+    setRecommendationReasons([]);
+    setBounds(null);
+  };
+
   const handleSourceChange = (value) => {
     setSource(value);
     setShowSourceDD(true);
     setSourceCoord(null);
+    clearRouteState();
     clearTimeout(sourceTimerRef.current);
     sourceTimerRef.current = setTimeout(() => geocodeSearch(value, setSourceSuggestions), 300);
   };
@@ -366,20 +377,93 @@ export default function Navigation() {
     setDest(value);
     setShowDestDD(true);
     setDestCoord(null);
+    clearRouteState();
     clearTimeout(destTimerRef.current);
     destTimerRef.current = setTimeout(() => geocodeSearch(value, setDestSuggestions), 300);
   };
 
-  const selectSource = (loc) => { setSource(loc.name); setSourceCoord([loc.lat, loc.lng]); setShowSourceDD(false); setSourceSuggestions([]); };
-  const selectDest = (loc) => { setDest(loc.name); setDestCoord([loc.lat, loc.lng]); setShowDestDD(false); setDestSuggestions([]); };
-  const swapLocations = () => { setSource(dest); setDest(source); setSourceCoord(destCoord); setDestCoord(sourceCoord); };
+  const selectSource = (loc) => {
+    setSource(loc.name);
+    setSourceCoord([loc.lat, loc.lng]);
+    setShowSourceDD(false);
+    setSourceSuggestions([]);
+    clearRouteState();
+  };
+
+  const selectDest = (loc) => {
+    setDest(loc.name);
+    setDestCoord([loc.lat, loc.lng]);
+    setShowDestDD(false);
+    setDestSuggestions([]);
+    clearRouteState();
+  };
+
+  const swapLocations = () => {
+    setSource(dest);
+    setDest(source);
+    setSourceCoord(destCoord);
+    setDestCoord(sourceCoord);
+    clearRouteState();
+  };
+
+  /* ---------- HELPER: RESOLVE COORDINATES BY TEXT ---------- */
+  const resolveCoordByText = async (text) => {
+    if (!text || !text.trim()) return null;
+    const cleanText = text.trim().toLowerCase();
+
+    // 1. Exact or normalized match in PRESET_LOCATIONS
+    const preset = PRESET_LOCATIONS.find(p =>
+      p.name.toLowerCase() === cleanText ||
+      (cleanText === 'mg road' && p.name.toLowerCase().includes('mg road')) ||
+      (cleanText === 'silk board' && p.name.toLowerCase().includes('silk board')) ||
+      (cleanText === 'hebbal' && p.name.toLowerCase().includes('hebbal')) ||
+      (cleanText === 'kr puram' && p.name.toLowerCase().includes('kr puram')) ||
+      (cleanText === 'whitefield' && p.name.toLowerCase().includes('whitefield')) ||
+      (cleanText === 'marathahalli' && p.name.toLowerCase().includes('marathahalli'))
+    );
+    if (preset) return [preset.lat, preset.lng];
+
+    // 2. Direct Nominatim geocode fallback
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text + ', Bengaluru')}&format=json&limit=1&countrycodes=in&viewbox=74.05,18.45,78.50,11.55&bounded=0`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      const data = await res.json();
+      if (data && data.length > 0) {
+        return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
 
   /* ---------- FIND & OPTIMIZE ROUTES ---------- */
   const findRoutes = async () => {
-    if (!sourceCoord || !destCoord) { toast.error('Select both locations'); return; }
+    // Resolve coordinates if text is present but coordinate is null
+    let effectiveSrcCoord = sourceCoord;
+    if (!effectiveSrcCoord && source) {
+      effectiveSrcCoord = await resolveCoordByText(source);
+      if (effectiveSrcCoord) setSourceCoord(effectiveSrcCoord);
+    }
+
+    let effectiveDstCoord = destCoord;
+    if (!effectiveDstCoord && dest) {
+      effectiveDstCoord = await resolveCoordByText(dest);
+      if (effectiveDstCoord) setDestCoord(effectiveDstCoord);
+    }
+
+    if (!effectiveSrcCoord || !effectiveDstCoord) {
+      toast.error('Select valid locations from suggestions or presets');
+      return;
+    }
+
+    // Always clear stale routes at start of search to guarantee fresh UI state
+    clearRouteState();
     setLoading(true);
+
+
     try {
-      const osrmRoutes = await fetchOSRMRoutes(sourceCoord[0], sourceCoord[1], destCoord[0], destCoord[1]);
+      const osrmRoutes = await fetchOSRMRoutes(effectiveSrcCoord[0], effectiveSrcCoord[1], effectiveDstCoord[0], effectiveDstCoord[1]);
       const processed = processOSRMRoutes(osrmRoutes);
 
       const candidatePayload = processed.map((r, i) => ({
@@ -437,8 +521,8 @@ export default function Navigation() {
 
       try {
         const riskRes = await api.post('/predict/risk', {
-          latitude: (sourceCoord[0] + destCoord[0]) / 2,
-          longitude: (sourceCoord[1] + destCoord[1]) / 2,
+          latitude: (effectiveSrcCoord[0] + effectiveDstCoord[0]) / 2,
+          longitude: (effectiveSrcCoord[1] + effectiveDstCoord[1]) / 2,
         });
         setRiskZones([{
           lat: riskRes.data.latitude,
@@ -457,10 +541,12 @@ export default function Navigation() {
     } catch (err) {
       console.error('Route error:', err);
       toast.error('Could not find routes. Check your connection.');
+      clearRouteState();
     } finally {
       setLoading(false);
     }
   };
+
 
   /* ---------- SAVE ROUTE TO BACKEND ---------- */
   const saveRoute = async (route) => {

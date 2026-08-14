@@ -1,3 +1,7 @@
+/**
+ * [RETAINED / LEGACY COMPONENT]
+ * About.jsx is retained for reference and is not exposed in the active user-facing navigation.
+ */
 import { HiAcademicCap, HiCode, HiChip, HiDatabase, HiGlobe, HiShieldCheck } from 'react-icons/hi';
 
 const techStack = [

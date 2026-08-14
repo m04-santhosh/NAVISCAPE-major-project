@@ -120,6 +120,75 @@ def _migrate_traffic_table():
         print(f"[MIGRATE] traffic_data migration warning: {exc}")
 
 
+def _migrate_traffic_unique_index():
+    """
+    Safely creates a composite unique index on traffic_data(junction_id, timestamp).
+    Pre-checks for existing duplicates before creating the index.
+    If duplicates exist: reports them and halts index creation without modifying any data.
+    """
+    try:
+        with engine.connect() as conn:
+            table_check = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='traffic_data'")).fetchone()
+            if not table_check:
+                return
+
+            # Pre-check for duplicate (junction_id, timestamp) pairs
+            dup_query = text("""
+                SELECT junction_id, timestamp, COUNT(*) as count
+                FROM traffic_data
+                GROUP BY junction_id, timestamp
+                HAVING COUNT(*) > 1
+            """)
+            dup_rows = conn.execute(dup_query).fetchall()
+            if dup_rows:
+                dup_details = [(row[0], str(row[1]), row[2]) for row in dup_rows]
+                msg = f"[MIGRATE ERROR] Found {len(dup_rows)} duplicate (junction_id, timestamp) pairs in traffic_data: {dup_details}. Halting unique index creation without modifying records."
+                print(msg)
+                raise RuntimeError(msg)
+
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_traffic_junction_timestamp ON traffic_data (junction_id, timestamp)"))
+            conn.commit()
+            print("[MIGRATE] traffic_data: verified uniqueness and ensured unique index 'uq_traffic_junction_timestamp'")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        print(f"[MIGRATE] traffic_data unique index migration warning: {exc}")
+
+
+def _migrate_traffic_hourly_table():
+    """
+    Ensures traffic_hourly composite unique index exists with pre-check safeguard.
+    If duplicates exist: reports them and halts index creation without modifying records.
+    """
+    try:
+        with engine.connect() as conn:
+            table_check = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='traffic_hourly'")).fetchone()
+            if not table_check:
+                return
+
+            # Pre-check for duplicate (junction_id, timestamp, is_test) pairs
+            dup_query = text("""
+                SELECT junction_id, timestamp, is_test, COUNT(*) as count
+                FROM traffic_hourly
+                GROUP BY junction_id, timestamp, is_test
+                HAVING COUNT(*) > 1
+            """)
+            dup_rows = conn.execute(dup_query).fetchall()
+            if dup_rows:
+                dup_details = [(row[0], str(row[1]), row[2], row[3]) for row in dup_rows]
+                msg = f"[MIGRATE ERROR] Found {len(dup_rows)} duplicate (junction_id, timestamp, is_test) pairs in traffic_hourly: {dup_details}. Halting unique index creation without modifying records."
+                print(msg)
+                raise RuntimeError(msg)
+
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_traffic_hourly_junction_time_test ON traffic_hourly (junction_id, timestamp, is_test)"))
+            conn.commit()
+            print("[MIGRATE] traffic_hourly: verified uniqueness and ensured unique index 'uq_traffic_hourly_junction_time_test'")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        print(f"[MIGRATE] traffic_hourly migration warning: {exc}")
+
+
 def init_db():
     """Create all tables and run additive migrations. Called on application startup."""
     # Register all models so Base.metadata knows about them
@@ -130,6 +199,10 @@ def init_db():
     _migrate_accident_table()
     _migrate_users_table()
     _migrate_traffic_table()
+    _migrate_traffic_unique_index()
 
     # create_all is safe — it only creates tables/columns that don't exist
     Base.metadata.create_all(bind=engine)
+
+    # Ensure unique index on newly created traffic_hourly table
+    _migrate_traffic_hourly_table()

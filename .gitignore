@@ -13,6 +13,9 @@ venv/
 # ML Models & Datasets (large files)
 ml/models/*.h5
 ml/models/*.pkl
+ml/models/**/*.h5
+ml/models/**/*.pkl
+ml/models/test/
 backend/app/ml_models/*.pkl
 ml/data/*.csv
 backend/data/**/*.csv

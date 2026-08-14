@@ -144,8 +144,12 @@ async def _fetch_tomtom_flow_point(
                     "speed_ratio": min(1.0, float(current_speed) / float(free_flow_speed)),
                     "confidence": float(confidence),
                 }
-    except Exception:
-        pass
+        else:
+            logger.warning(f"TomTom Flow API returned status {resp.status_code} for point ({lat}, {lng})")
+    except httpx.TimeoutException:
+        logger.warning(f"TomTom Flow API request timed out for point ({lat}, {lng})")
+    except Exception as exc:
+        logger.warning(f"TomTom Flow API request failed for point ({lat}, {lng}): {exc}")
     return None
 
 
@@ -285,9 +289,13 @@ def _get_route_junction_predictions(
     Find which monitored junctions the route passes through and generate
     legitimate traffic predictions for those junctions.
     Only junctions within JUNCTION_MATCH_RADIUS_KM of a route waypoint qualify.
+
+    Honest Forecasting Horizons:
+    - 60-minute forecast: Uses genuine 1-step (next-hour) LSTM model output trained on TrafficHourly.
+    - 30-minute forecast: Model is hourly; reports that 30-min resolution requires dedicated sub-hourly model and returns prediction_available=False.
     """
     now = datetime.now()
-    target_hour = (now.hour + prediction_horizon_minutes // 60) % 24
+    target_hour = (now.hour + (1 if prediction_horizon_minutes >= 60 else 0)) % 24
 
     matched_junctions = []
     for junc in MONITORED_JUNCTIONS:
@@ -303,14 +311,26 @@ def _get_route_junction_predictions(
             "reason": "Route does not pass through any monitored junction",
         }
 
+    # If requested horizon is 30-min, do not fabricate half-hour target
+    if prediction_horizon_minutes < 60:
+        return {
+            "prediction_available": False,
+            "reason": "30-minute prediction horizon requires a dedicated sub-hourly resolution dataset/model",
+            "predicted_traffic_score": None,
+            "junction_predictions": [],
+            "junctions_on_route": [j["name"] for j in matched_junctions],
+            "source": "unavailable",
+            "prediction_horizon_minutes": prediction_horizon_minutes,
+            "target_hour": target_hour,
+        }
+
     # Try loading genuine LSTM model if present (checks for prod model)
-    global _lstm_model, _lstm_scaler, _lstm_loaded
     try:
         from .traffic_collector import predict_traffic_lstm
 
         junc_predictions = []
         has_any_lstm = False
-        
+
         for j in matched_junctions:
             if db is not None:
                 preds = predict_traffic_lstm(db, junction_id=j["id"], hours_ahead=1, use_test_model=False)

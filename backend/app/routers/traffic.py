@@ -274,9 +274,79 @@ async def trigger_traffic_collection(
     Collects speeds for all 8 monitored junctions and saves them in the database.
     """
     from ..services.traffic_collector import fetch_and_store_junction_traffic
-    stored_count = await fetch_and_store_junction_traffic(db)
+    summary = await fetch_and_store_junction_traffic(db)
+    stored_count = summary.get("records_inserted", 0) if isinstance(summary, dict) else summary
     return {
         "status": "success",
         "message": f"Successfully completed collection run. Stored {stored_count} observations.",
         "stored_count": stored_count,
+        "summary": summary if isinstance(summary, dict) else {},
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 13.3: Historical Traffic Quality & Coverage Intelligence
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/coverage", tags=["Traffic Intelligence"])
+async def get_traffic_coverage(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 13.3 — Read-only historical traffic quality and coverage report.
+
+    Returns per-junction quality metrics (raw/hourly counts, quality breakdowns,
+    missing hours, coverage percentages, longest continuous sequences, and
+    data readiness status) plus weighted overall coverage across all 8 junctions.
+
+    Data readiness indicates historical coverage status ONLY.
+    It does NOT indicate LSTM readiness or prediction availability.
+
+    Never exposes filesystem paths, secrets, or internal exceptions.
+    """
+    try:
+        from ..services.traffic_collector import get_traffic_coverage_summary
+        summary = get_traffic_coverage_summary(db, is_test=False)
+        return summary
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred while computing traffic coverage."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 14: Production LSTM Training & Health Status Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/train", tags=["Traffic ML"])
+async def trigger_traffic_lstm_training(
+    junction_id: int = Query(1, ge=1, le=8),
+    is_test: bool = Query(False),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 14 — Triggers per-junction LSTM training with Phase 13.3 readiness gate.
+    Requires historically_ready data for production training.
+    """
+    from ..services.traffic_collector import train_lstm_from_db
+    res = train_lstm_from_db(db, junction_id=junction_id, is_test=is_test)
+    return res
+
+
+@router.get("/lstm-status", tags=["Traffic ML"])
+async def get_traffic_lstm_status(
+    junction_id: int = Query(1, ge=1, le=8),
+    is_test: bool = Query(False),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 14 — Returns model health and availability status for the junction.
+    """
+    from ..services.traffic_collector import get_lstm_model_status
+    return get_lstm_model_status(db, junction_id=junction_id, use_test_model=is_test)
+
+
