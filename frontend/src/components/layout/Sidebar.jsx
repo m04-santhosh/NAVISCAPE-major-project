@@ -18,13 +18,7 @@ import {
 const navItems = [
   { to: '/navigate', icon: IconMap, label: 'Navigation' },
   { to: '/analytics', icon: IconAnalytics, label: 'Analytics' },
-  {
-    to: '#women-safety',
-    icon: IconShield,
-    label: 'Women Safety',
-    isPlaceholder: true,
-    badge: 'SOON'
-  },
+  { to: '/women-safety', icon: IconShield, label: 'Women Safety' },
 ];
 
 export default function Sidebar() {

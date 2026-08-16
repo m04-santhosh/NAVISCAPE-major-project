@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, CircleMarker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import api from '../services/api';
@@ -193,6 +193,42 @@ const carIconHtml = (rot) => L.divIcon({
   iconAnchor: [18, 18],
 });
 
+/* ---- police station icon ---- */
+const policeIconHtml = L.divIcon({
+  className: '',
+  html: `
+    <div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;width:28px;height:28px;border-radius:50%;background:#3b82f6;opacity:0.25;"></div>
+      <div style="position:absolute;width:24px;height:24px;border-radius:50%;border:2px solid #3b82f6;background:#0f172a;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5);display:flex;align-items:center;justify-content:center;color:#60a5fa">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+    </div>
+  `,
+  iconSize: [32, 32],
+  iconAnchor: [16, 16],
+  popupAnchor: [0, -16],
+});
+
+/* ---- hospital marker icon ---- */
+const hospitalIconHtml = L.divIcon({
+  className: '',
+  html: `
+    <div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;width:28px;height:28px;border-radius:50%;background:#ef4444;opacity:0.25;"></div>
+      <div style="position:absolute;width:24px;height:24px;border-radius:50%;border:2px solid #ef4444;background:#0f172a;box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5);display:flex;align-items:center;justify-content:center;color:#f87171">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 6v12M6 12h12"/>
+        </svg>
+      </div>
+    </div>
+  `,
+  iconSize: [32, 32],
+  iconAnchor: [16, 16],
+  popupAnchor: [0, -16],
+});
+
 export default function Navigation() {
   const { user } = useAuth();
   const [hazards, setHazards] = useState([]);
@@ -218,6 +254,30 @@ export default function Navigation() {
   const [showSourceDD, setShowSourceDD] = useState(false);
   const [showDestDD, setShowDestDD] = useState(false);
   const [showTraffic, setShowTraffic] = useState(true);
+  const [showPoliceStations, setShowPoliceStations] = useState(false);
+  const [policeStations, setPoliceStations] = useState([]);
+  const [loadingPoliceStations, setLoadingPoliceStations] = useState(false);
+
+  // WS-3: Hospital Map Layer State
+  const [showHospitals, setShowHospitals] = useState(false);
+  const [hospitals, setHospitals] = useState([]);
+  const [loadingHospitals, setLoadingHospitals] = useState(false);
+
+  // WS-4: Nearest Police Station Intelligence State
+  const [userLocation, setUserLocation] = useState(null);
+  const [locState, setLocState] = useState('idle'); // 'idle' | 'loading' | 'available' | 'permission_denied' | 'unavailable' | 'timeout'
+  const [nearestStation, setNearestStation] = useState(null);
+  const [nearestStationLoading, setNearestStationLoading] = useState(false);
+  const [nearestStationError, setNearestStationError] = useState(null); // null | 'no_station' | 'api_error' | 'permission_denied' | 'unavailable' | 'timeout'
+  const lastFetchedLocRef = useRef(null);
+  const requestIdRef = useRef(0);
+
+  // WS-4: Nearest Hospital Intelligence State
+  const [nearestHospital, setNearestHospital] = useState(null);
+  const [nearestHospitalLoading, setNearestHospitalLoading] = useState(false);
+  const [nearestHospitalError, setNearestHospitalError] = useState(null); // null | 'no_hospital' | 'api_error' | 'permission_denied' | 'unavailable' | 'timeout'
+  const lastFetchedHospitalLocRef = useRef(null);
+  const hospitalRequestIdRef = useRef(0);
 
   // Geocoding search results
   const [sourceSuggestions, setSourceSuggestions] = useState([]);
@@ -568,20 +628,190 @@ export default function Navigation() {
     }
   };
 
+  /* ---------- WS-4: NEAREST POLICE STATION INTELLIGENCE ---------- */
+  const fetchNearestPoliceStation = useCallback(async (lat, lng, radiusKm = null) => {
+    if (lat == null || lng == null) return;
+    const currentReqId = ++requestIdRef.current;
+    setNearestStationLoading(true);
+    setNearestStationError(null);
+
+    try {
+      const params = { latitude: lat, longitude: lng };
+      if (radiusKm) params.radius_km = radiusKm;
+      const res = await api.get('/police-stations/nearest', { params });
+
+      // Stale request protection: Ignore if a newer request was dispatched
+      if (currentReqId !== requestIdRef.current) return;
+
+      setNearestStation(res.data);
+      lastFetchedLocRef.current = [lat, lng];
+      setNearestStationError(null);
+    } catch (err) {
+      if (currentReqId !== requestIdRef.current) return;
+
+      if (err.response && err.response.status === 404) {
+        setNearestStation(null);
+        setNearestStationError('no_station');
+      } else {
+        setNearestStation(null);
+        setNearestStationError('api_error');
+      }
+    } finally {
+      if (currentReqId === requestIdRef.current) {
+        setNearestStationLoading(false);
+      }
+    }
+  }, []);
+
+  /* ---------- WS-4: NEAREST HOSPITAL INTELLIGENCE ---------- */
+  const fetchNearestHospital = useCallback(async (lat, lng, radiusKm = null) => {
+    if (lat == null || lng == null) return;
+    const currentReqId = ++hospitalRequestIdRef.current;
+    setNearestHospitalLoading(true);
+    setNearestHospitalError(null);
+
+    try {
+      const params = { lat, lng };
+      if (radiusKm) params.radius_km = radiusKm;
+      const res = await api.get('/hospitals/nearest', { params });
+
+      // Stale request protection: Ignore if a newer request was dispatched
+      if (currentReqId !== hospitalRequestIdRef.current) return;
+
+      setNearestHospital(res.data);
+      lastFetchedHospitalLocRef.current = [lat, lng];
+      setNearestHospitalError(null);
+    } catch (err) {
+      if (currentReqId !== hospitalRequestIdRef.current) return;
+
+      if (err.response && err.response.status === 404) {
+        setNearestHospital(null);
+        setNearestHospitalError('no_hospital');
+      } else {
+        setNearestHospital(null);
+        setNearestHospitalError('api_error');
+      }
+    } finally {
+      if (currentReqId === hospitalRequestIdRef.current) {
+        setNearestHospitalLoading(false);
+      }
+    }
+  }, []);
+
+  const requestUserLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setLocState('unavailable');
+      setNearestStationError('unavailable');
+      setNearestHospitalError('unavailable');
+      return;
+    }
+    setLocState('loading');
+    setNearestStationLoading(true);
+    setNearestStationError(null);
+    setNearestHospitalLoading(true);
+    setNearestHospitalError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const newCoords = [latitude, longitude];
+        setUserLocation(newCoords);
+        setLocState('available');
+        fetchNearestPoliceStation(latitude, longitude);
+        fetchNearestHospital(latitude, longitude);
+      },
+      (err) => {
+        setNearestStationLoading(false);
+        setNearestHospitalLoading(false);
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocState('permission_denied');
+          setNearestStationError('permission_denied');
+          setNearestHospitalError('permission_denied');
+        } else if (err.code === err.TIMEOUT) {
+          setLocState('timeout');
+          setNearestStationError('timeout');
+          setNearestHospitalError('timeout');
+        } else {
+          setLocState('unavailable');
+          setNearestStationError('unavailable');
+          setNearestHospitalError('unavailable');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }, [fetchNearestPoliceStation, fetchNearestHospital]);
+
+  // Initial user location check for nearest safety facility on mount
+  useEffect(() => {
+    requestUserLocation();
+  }, [requestUserLocation]);
+
+  // Dynamic location watcher during live navigation with 150-meter refresh threshold
+  useEffect(() => {
+    if (!navPosition || !navPosition[0] || !navPosition[1]) return;
+    // Police Station check
+    if (!lastFetchedLocRef.current) {
+      fetchNearestPoliceStation(navPosition[0], navPosition[1]);
+    } else {
+      const distMoved = haversineMeters(
+        lastFetchedLocRef.current[0],
+        lastFetchedLocRef.current[1],
+        navPosition[0],
+        navPosition[1]
+      );
+      if (distMoved >= 150) {
+        fetchNearestPoliceStation(navPosition[0], navPosition[1]);
+      }
+    }
+    // Hospital check
+    if (!lastFetchedHospitalLocRef.current) {
+      fetchNearestHospital(navPosition[0], navPosition[1]);
+    } else {
+      const distMoved = haversineMeters(
+        lastFetchedHospitalLocRef.current[0],
+        lastFetchedHospitalLocRef.current[1],
+        navPosition[0],
+        navPosition[1]
+      );
+      if (distMoved >= 150) {
+        fetchNearestHospital(navPosition[0], navPosition[1]);
+      }
+    }
+  }, [navPosition, fetchNearestPoliceStation, fetchNearestHospital]);
+
   const locateUser = useCallback(() => {
-    if (!("geolocation" in navigator)) return;
+    if (!("geolocation" in navigator)) {
+      toast.error("Geolocation is not supported by your browser");
+      setLocState('unavailable');
+      return;
+    }
+    setLocState('loading');
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         const pos = [latitude, longitude];
+        setUserLocation(pos);
+        setLocState('available');
         setSourceCoord(pos);
         setSource('Your Location');
         setBounds(L.latLngBounds([pos]));
         toast.success("Location updated");
+        fetchNearestPoliceStation(latitude, longitude);
+        fetchNearestHospital(latitude, longitude);
       },
-      () => toast.error("Could not find your location")
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocState('permission_denied');
+        } else if (err.code === err.TIMEOUT) {
+          setLocState('timeout');
+        } else {
+          setLocState('unavailable');
+        }
+        toast.error("Could not find your location");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
     );
-  }, []);
+  }, [fetchNearestPoliceStation, fetchNearestHospital]);
 
   const fetchHazards = useCallback(async () => {
     try {
@@ -591,6 +821,98 @@ export default function Navigation() {
       console.error('Failed to fetch road hazards:', err);
     }
   }, []);
+
+  const fetchPoliceStations = useCallback(async () => {
+    if (policeStations.length > 0) return;
+    setLoadingPoliceStations(true);
+    try {
+      const res = await api.get('/police-stations');
+      setPoliceStations(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch police stations:', err);
+      toast.error('Could not load police stations');
+    } finally {
+      setLoadingPoliceStations(false);
+    }
+  }, [policeStations.length]);
+
+  useEffect(() => {
+    if (showPoliceStations && policeStations.length === 0) {
+      fetchPoliceStations();
+    }
+  }, [showPoliceStations, policeStations.length, fetchPoliceStations]);
+
+  // Group police stations by unique coordinate pair to preserve co-located stations in a single marker
+  const groupedPoliceStations = useMemo(() => {
+    const groups = {};
+    policeStations.forEach((st) => {
+      if (st.latitude != null && st.longitude != null) {
+        const key = `${st.latitude.toFixed(6)},${st.longitude.toFixed(6)}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(st);
+      }
+    });
+    return Object.values(groups);
+  }, [policeStations]);
+
+  const handleNavigateToStation = (st) => {
+    setDest(st.station_name);
+    setDestCoord([st.latitude, st.longitude]);
+    clearRouteState();
+    toast.success(`Destination set to ${st.station_name}`);
+  };
+
+  // WS-3: Fetch Hospitals with caching and error state handling
+  const fetchHospitals = useCallback(async () => {
+    if (hospitals.length > 0) return;
+    setLoadingHospitals(true);
+    const toastId = toast.loading('Loading hospitals...');
+    try {
+      const res = await api.get('/hospitals');
+      const data = res.data || [];
+      setHospitals(data);
+      if (data.length === 0) {
+        toast.error('No verified hospitals available', { id: toastId });
+      } else {
+        toast.success(`Loaded ${data.length} verified hospitals`, { id: toastId });
+      }
+    } catch (err) {
+      console.error('Failed to fetch hospitals:', err);
+      toast.error('Unable to load hospitals', { id: toastId });
+    } finally {
+      setLoadingHospitals(false);
+    }
+  }, [hospitals.length]);
+
+  useEffect(() => {
+    if (showHospitals && hospitals.length === 0) {
+      fetchHospitals();
+    }
+  }, [showHospitals, hospitals.length, fetchHospitals]);
+
+  // Group hospitals by unique coordinate pair to preserve co-located hospitals in a single marker
+  const groupedHospitals = useMemo(() => {
+    const groups = {};
+    hospitals.forEach((h) => {
+      if (h.latitude != null && h.longitude != null) {
+        const key = `${Number(h.latitude).toFixed(6)},${Number(h.longitude).toFixed(6)}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(h);
+      }
+    });
+    // Deterministic ordering: hospital_name ASC, id ASC
+    Object.values(groups).forEach((grp) => {
+      grp.sort((a, b) => (a.hospital_name || '').localeCompare(b.hospital_name || '') || (a.id - b.id));
+    });
+    return Object.values(groups);
+  }, [hospitals]);
+
+  const handleNavigateToHospital = (h) => {
+    setDest(h.hospital_name);
+    setDestCoord([h.latitude, h.longitude]);
+    clearRouteState();
+    toast.success(`Destination set to ${h.hospital_name}`);
+  };
 
   const handleReportHazard = async (e) => {
     e.preventDefault();
@@ -956,6 +1278,273 @@ export default function Navigation() {
             <button onClick={findRoutes} disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-xl shadow-lg">
               {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><HiSearch className="w-4 h-4" /><span>Find Routes</span></>}
             </button>
+
+            {/* ===== WS-4: NEAREST POLICE STATION INTELLIGENCE CARD ===== */}
+            <div className="mt-3 p-3 rounded-xl bg-surface-950/80 border border-blue-500/40 shadow-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                  <span>🛡️</span> Nearest Police Station
+                </span>
+                {nearestStationLoading && (
+                  <span className="text-[10px] text-blue-300 animate-pulse flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                    Locating...
+                  </span>
+                )}
+              </div>
+
+              {/* State 1: Permission Denied */}
+              {locState === 'permission_denied' && (
+                <div className="text-xs text-amber-300/90 bg-amber-950/40 p-2.5 rounded-lg border border-amber-500/30 flex flex-col gap-1.5">
+                  <div className="font-semibold flex items-center gap-1">
+                    <span>⚠️</span> Location access is disabled.
+                  </div>
+                  <p className="text-[10px] text-surface-400 leading-tight">
+                    Location permission is required to find the nearest police station.
+                  </p>
+                  <button
+                    onClick={requestUserLocation}
+                    className="mt-1 py-1 px-2.5 bg-amber-600/80 hover:bg-amber-500 text-white rounded text-[11px] font-bold w-fit transition-colors"
+                  >
+                    Enable Location
+                  </button>
+                </div>
+              )}
+
+              {/* State 2: Location Loading */}
+              {locState === 'loading' && nearestStationLoading && !nearestStation && (
+                <div className="text-xs text-surface-400 py-2 flex items-center gap-2">
+                  <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  <span>Finding nearest police station...</span>
+                </div>
+              )}
+
+              {/* State 3: Location Unavailable or Timeout */}
+              {(locState === 'unavailable' || locState === 'timeout') && (
+                <div className="text-xs text-surface-400 bg-surface-900/60 p-2 rounded-lg border border-surface-800 flex items-center justify-between">
+                  <span>{locState === 'timeout' ? 'Location request timed out.' : 'Location unavailable on this device.'}</span>
+                  <button
+                    onClick={requestUserLocation}
+                    className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* State 4: Idle state before location is requested */}
+              {locState === 'idle' && !nearestStation && (
+                <div className="text-xs text-surface-400 flex items-center justify-between">
+                  <span className="text-[11px]">Detect nearest station from your location</span>
+                  <button
+                    onClick={requestUserLocation}
+                    className="py-1 px-2.5 bg-blue-600/80 hover:bg-blue-600 text-white rounded text-[10px] font-bold transition-colors"
+                  >
+                    Detect Now
+                  </button>
+                </div>
+              )}
+
+              {/* State 5: No Station within radius */}
+              {nearestStationError === 'no_station' && (
+                <div className="text-xs text-surface-400 bg-surface-900/60 p-2 rounded-lg border border-surface-800">
+                  <span>No police station found within the selected radius.</span>
+                </div>
+              )}
+
+              {/* State 6: API Error */}
+              {nearestStationError === 'api_error' && (
+                <div className="text-xs text-red-400 bg-red-950/30 p-2 rounded-lg border border-red-500/30 flex items-center justify-between">
+                  <span>Unable to find the nearest police station right now.</span>
+                  <button
+                    onClick={() => userLocation && fetchNearestPoliceStation(userLocation[0], userLocation[1])}
+                    className="text-[10px] text-red-300 hover:text-white font-bold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* State 7: Success — Nearest Station Card Display */}
+              {nearestStation && nearestStation.station && (
+                <div className="space-y-1.5 pt-0.5">
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-black text-sm text-surface-100 truncate">
+                      {nearestStation.station.station_name}
+                    </span>
+                    <span className="text-xs font-bold text-emerald-400 flex-shrink-0">
+                      {nearestStation.distance_km < 1
+                        ? `${nearestStation.distance_m} m away`
+                        : `${nearestStation.distance_km} km away`}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[10px] text-surface-400">
+                    {nearestStation.station.kgis_ps_code && (
+                      <span>KGIS Code: <b className="text-surface-200">{nearestStation.station.kgis_ps_code}</b></span>
+                    )}
+                    {nearestStation.station.department_code && (
+                      <span>Dept: <b className="text-surface-200">{nearestStation.station.department_code}</b></span>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => handleNavigateToStation(nearestStation.station)}
+                    className="mt-1 w-full py-1.5 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-md transition-all active:scale-98 flex items-center justify-center gap-1.5"
+                  >
+                    <HiPaperAirplane className="w-3.5 h-3.5 rotate-90" />
+                    Navigate to {nearestStation.station.station_name}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* ===== WS-4: NEAREST HOSPITAL INTELLIGENCE CARD ===== */}
+            <div className="mt-3 p-3 rounded-xl bg-surface-950/80 border border-rose-500/40 shadow-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                  <span>🏥</span> Nearest Hospital
+                </span>
+                {nearestHospitalLoading && (
+                  <span className="text-[10px] text-rose-300 animate-pulse flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping" />
+                    Locating...
+                  </span>
+                )}
+              </div>
+
+              {/* State 1: Permission Denied */}
+              {locState === 'permission_denied' && (
+                <div className="text-xs text-amber-300/90 bg-amber-950/40 p-2.5 rounded-lg border border-amber-500/30 flex flex-col gap-1.5">
+                  <div className="font-semibold flex items-center gap-1">
+                    <span>⚠️</span> Location access is disabled.
+                  </div>
+                  <p className="text-[10px] text-surface-400 leading-tight">
+                    Location access is required to find the nearest hospital.
+                  </p>
+                  <button
+                    onClick={requestUserLocation}
+                    className="mt-1 py-1 px-2.5 bg-amber-600/80 hover:bg-amber-500 text-white rounded text-[11px] font-bold w-fit transition-colors"
+                  >
+                    Enable Location
+                  </button>
+                </div>
+              )}
+
+              {/* State 2: Location Loading */}
+              {locState === 'loading' && nearestHospitalLoading && !nearestHospital && (
+                <div className="text-xs text-surface-400 py-2 flex items-center gap-2">
+                  <div className="w-3.5 h-3.5 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
+                  <span>Finding nearest hospital...</span>
+                </div>
+              )}
+
+              {/* State 3: Location Unavailable or Timeout */}
+              {(locState === 'unavailable' || locState === 'timeout') && !nearestHospital && (
+                <div className="text-xs text-surface-400 bg-surface-900/60 p-2 rounded-lg border border-surface-800 flex items-center justify-between">
+                  <span>{locState === 'timeout' ? 'Location request timed out.' : 'Unable to determine your location.'}</span>
+                  <button
+                    onClick={requestUserLocation}
+                    className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* State 4: Idle state before location is requested */}
+              {locState === 'idle' && !nearestHospital && (
+                <div className="text-xs text-surface-400 flex items-center justify-between">
+                  <span className="text-[11px]">Detect nearest hospital from your location</span>
+                  <button
+                    onClick={requestUserLocation}
+                    className="py-1 px-2.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded text-[10px] font-bold transition-colors"
+                  >
+                    Detect Now
+                  </button>
+                </div>
+              )}
+
+              {/* State 5: No Hospital within radius */}
+              {nearestHospitalError === 'no_hospital' && (
+                <div className="text-xs text-surface-400 bg-surface-900/60 p-2 rounded-lg border border-surface-800">
+                  <span>No verified hospital found within the selected radius.</span>
+                </div>
+              )}
+
+              {/* State 6: API Error */}
+              {nearestHospitalError === 'api_error' && (
+                <div className="text-xs text-red-400 bg-red-950/30 p-2 rounded-lg border border-red-500/30 flex items-center justify-between">
+                  <span>Unable to find the nearest hospital.</span>
+                  <button
+                    onClick={() => userLocation && fetchNearestHospital(userLocation[0], userLocation[1])}
+                    className="text-[10px] text-red-300 hover:text-white font-bold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* State 7: Success — Nearest Hospital Card Display */}
+              {nearestHospital && nearestHospital.hospital && (
+                <div className="space-y-2 pt-0.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-black text-sm text-surface-100 truncate">
+                      {nearestHospital.hospital.hospital_name}
+                    </span>
+                    <span className="text-xs font-bold text-emerald-400 flex-shrink-0">
+                      {nearestHospital.distance_km < 1
+                        ? `${nearestHospital.distance_m} m away`
+                        : `${nearestHospital.distance_km} km away`}
+                    </span>
+                  </div>
+
+                  {/* Badges */}
+                  <div className="flex flex-wrap gap-1">
+                    {nearestHospital.hospital.hospital_category && (
+                      <span className="text-[9px] font-semibold bg-rose-950/60 text-rose-300 px-1.5 py-0.5 rounded border border-rose-500/40">
+                        {nearestHospital.hospital.hospital_category}
+                      </span>
+                    )}
+                    {nearestHospital.hospital.hospital_care_type && (
+                      <span className="text-[9px] font-semibold bg-blue-950/60 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/40">
+                        {nearestHospital.hospital.hospital_care_type}
+                      </span>
+                    )}
+                    {nearestHospital.hospital.total_beds != null && (
+                      <span className="text-[9px] font-semibold bg-surface-800 text-surface-300 px-1.5 py-0.5 rounded">
+                        🛏️ {nearestHospital.hospital.total_beds} Beds
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Real Emergency Attributes */}
+                  {nearestHospital.hospital.emergency_services && (
+                    <div className="text-[10px] font-semibold text-rose-400 flex items-center gap-1">
+                      🚨 Emergency: {nearestHospital.hospital.emergency_services}
+                    </div>
+                  )}
+                  {nearestHospital.hospital.emergency_number && (
+                    <div className="text-[10px] text-surface-300">
+                      📞 Emergency: <a href={`tel:${nearestHospital.hospital.emergency_number}`} className="font-bold text-cyan-400 hover:underline">{nearestHospital.hospital.emergency_number}</a>
+                    </div>
+                  )}
+                  {nearestHospital.hospital.ambulance_phone && (
+                    <div className="text-[10px] text-surface-300">
+                      🚑 Ambulance: <a href={`tel:${nearestHospital.hospital.ambulance_phone}`} className="font-bold text-rose-400 hover:underline">{nearestHospital.hospital.ambulance_phone}</a>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => handleNavigateToHospital(nearestHospital.hospital)}
+                    className="mt-1 w-full py-1.5 px-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white rounded-lg text-xs font-bold shadow-md transition-all active:scale-98 flex items-center justify-center gap-1.5"
+                  >
+                    <HiPaperAirplane className="w-3.5 h-3.5 rotate-90" />
+                    Navigate to Hospital
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
       </>
@@ -1145,7 +1734,14 @@ export default function Navigation() {
     <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-surface-950 z-0">
 
       {/* ===== FLOATING TOP-RIGHT NAVBAR CONTROLS ===== */}
-      <NavbarControls showTraffic={showTraffic} onToggleTraffic={() => setShowTraffic(v => !v)} />
+      <NavbarControls
+        showTraffic={showTraffic}
+        onToggleTraffic={() => setShowTraffic(v => !v)}
+        showPoliceStations={showPoliceStations}
+        onTogglePoliceStations={() => setShowPoliceStations(v => !v)}
+        showHospitals={showHospitals}
+        onToggleHospitals={() => setShowHospitals(v => !v)}
+      />
 
       {/* ===== FLOATING ROUTE PLANNER CARD (TOP-LEFT) ===== */}
       {!isNavigating && (
@@ -1368,16 +1964,175 @@ export default function Navigation() {
                   </div>
                   {user && h.user_id === user.id && (
                     <button
-                      onClick={() => handleResolveHazard(h.id)}
-                      className="w-full mt-3 py-1.5 text-xs font-bold text-center text-white bg-green-600 hover:bg-green-500 rounded-lg transition-colors duration-150 shadow"
+                      onClick={() => handleDeleteHazard(h.id)}
+                      className="mt-2 text-[10px] text-red-600 hover:text-red-700 font-semibold border-t border-slate-100 pt-1.5 w-full text-left"
                     >
-                      Resolve/Clear Hazard
+                      Delete my report
                     </button>
                   )}
                 </div>
               </Popup>
             </Marker>
           ))}
+
+          {/* Police Station Markers Layer */}
+          {showPoliceStations && groupedPoliceStations.map((group, idx) => {
+            const primary = group[0];
+            const isMulti = group.length > 1;
+            const currentPos = navPosition || sourceCoord;
+            let distStr = null;
+            if (currentPos && currentPos[0] && currentPos[1]) {
+              const m = haversineMeters(currentPos[0], currentPos[1], primary.latitude, primary.longitude);
+              distStr = m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+            }
+
+            return (
+              <Marker
+                key={`ps-group-${primary.id || idx}`}
+                position={[primary.latitude, primary.longitude]}
+                icon={policeIconHtml}
+              >
+                <Popup>
+                  <div className="p-2 text-slate-900 font-sans min-w-[210px] max-w-[260px]">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 mb-1.5">
+                      <span className="font-bold text-[11px] text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                        🛡️ {isMulti ? `POLICE COMPLEX (${group.length})` : 'POLICE STATION'}
+                      </span>
+                      {distStr && (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                          {distStr}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {group.map((st) => (
+                        <div key={st.id || st.object_id} className="pt-1 first:pt-0">
+                          <div className="font-black text-xs text-slate-900 leading-snug">{st.station_name}</div>
+                          {st.kgis_ps_code && (
+                            <div className="text-[10px] text-slate-600 font-medium">
+                              Code: <span className="font-semibold text-slate-800">{st.kgis_ps_code}</span>
+                            </div>
+                          )}
+                          {st.department_code && (
+                            <div className="text-[9px] text-slate-400">
+                              Dept: {st.department_code}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => handleNavigateToStation(st)}
+                            className="mt-1.5 w-full py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 active:scale-98 text-white rounded-lg text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1"
+                          >
+                            <HiOutlineLocationMarker className="w-3.5 h-3.5" /> Navigate Here
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+
+          {/* WS-3: Hospital Markers Layer */}
+          {showHospitals && groupedHospitals.map((group, idx) => {
+            const primary = group[0];
+            const isMulti = group.length > 1;
+            const currentPos = navPosition || userLocation || sourceCoord;
+            let distStr = 'Distance unavailable';
+            if (currentPos && currentPos[0] != null && currentPos[1] != null) {
+              const m = haversineMeters(currentPos[0], currentPos[1], primary.latitude, primary.longitude);
+              distStr = m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+            }
+
+            return (
+              <Marker
+                key={`hosp-group-${primary.id || idx}`}
+                position={[primary.latitude, primary.longitude]}
+                icon={hospitalIconHtml}
+              >
+                <Popup>
+                  <div className="p-2 text-slate-900 font-sans min-w-[240px] max-w-[290px]">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 mb-1.5">
+                      <span className="font-bold text-[11px] text-rose-700 uppercase tracking-wider flex items-center gap-1">
+                        🏥 {isMulti ? `MEDICAL COMPLEX (${group.length})` : 'HOSPITAL'}
+                      </span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                        distStr !== 'Distance unavailable'
+                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                          : 'text-slate-500 bg-slate-50 border-slate-200'
+                      }`}>
+                        {distStr}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 max-h-56 overflow-y-auto pr-1">
+                      {group.map((h) => (
+                        <div key={h.id || h.source_id} className="pt-2 first:pt-0 border-t border-slate-100 first:border-t-0">
+                          <div className="font-black text-xs text-slate-900 leading-snug">{h.hospital_name}</div>
+
+                          {/* Category & Care Type Badges */}
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {h.hospital_category && (
+                              <span className="text-[9px] font-semibold bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200">
+                                {h.hospital_category}
+                              </span>
+                            )}
+                            {h.hospital_care_type && (
+                              <span className="text-[9px] font-semibold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+                                {h.hospital_care_type}
+                              </span>
+                            )}
+                            {h.total_beds != null && (
+                              <span className="text-[9px] font-semibold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                                🛏️ {h.total_beds} Beds
+                              </span>
+                            )}
+                          </div>
+
+                          {/* District / Address */}
+                          {(h.district || h.city || h.address) && (
+                            <div className="text-[10px] text-slate-600 font-normal mt-1 line-clamp-2">
+                              📍 {h.address || `${h.city || ''}, ${h.district || ''}`}
+                            </div>
+                          )}
+
+                          {/* Real Emergency Attributes from DB */}
+                          {h.emergency_services && (
+                            <div className="text-[10px] font-semibold text-rose-600 mt-1 flex items-center gap-1">
+                              🚨 Emergency: {h.emergency_services}
+                            </div>
+                          )}
+                          {h.emergency_number && (
+                            <div className="text-[10px] text-slate-700 font-medium mt-0.5">
+                              📞 Emergency: <a href={`tel:${h.emergency_number}`} className="font-bold text-blue-600 hover:underline">{h.emergency_number}</a>
+                            </div>
+                          )}
+                          {h.ambulance_phone && (
+                            <div className="text-[10px] text-slate-700 font-medium mt-0.5">
+                              🚑 Ambulance: <a href={`tel:${h.ambulance_phone}`} className="font-bold text-rose-600 hover:underline">{h.ambulance_phone}</a>
+                            </div>
+                          )}
+                          {h.specialties && (
+                            <div className="text-[9px] text-slate-500 mt-1 line-clamp-2 italic">
+                              Specialties: {h.specialties}
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => handleNavigateToHospital(h)}
+                            className="mt-2 w-full py-1.5 px-2.5 bg-rose-600 hover:bg-rose-700 active:scale-98 text-white rounded-lg text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1"
+                          >
+                            <HiOutlineLocationMarker className="w-3.5 h-3.5" /> Navigate Here
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
         </MapContainer>
 
         {/* Floating Map Action Buttons (Bottom Right) */}

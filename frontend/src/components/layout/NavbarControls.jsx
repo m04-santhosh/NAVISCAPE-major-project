@@ -12,7 +12,14 @@ import {
   HiMap
 } from 'react-icons/hi';
 
-export default function NavbarControls({ showTraffic, onToggleTraffic }) {
+export default function NavbarControls({
+  showTraffic,
+  onToggleTraffic,
+  showPoliceStations,
+  onTogglePoliceStations,
+  showHospitals,
+  onToggleHospitals,
+}) {
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -32,6 +39,34 @@ export default function NavbarControls({ showTraffic, onToggleTraffic }) {
 
   return (
     <div className="fixed top-4 right-4 z-[1000] flex items-center gap-2 pointer-events-auto">
+      {/* Hospitals Layer Toggle Button */}
+      <button
+        onClick={onToggleHospitals}
+        title={showHospitals ? 'Hide Hospitals Layer' : 'Show Hospitals Layer'}
+        className={`px-3 py-2 rounded-xl border text-xs font-semibold shadow-lg backdrop-blur-md transition-all duration-200 active:scale-95 flex items-center gap-2 ${
+          showHospitals
+            ? 'bg-rose-950/85 border-rose-500/50 text-rose-300 hover:bg-rose-900/85 shadow-rose-950/50'
+            : 'bg-surface-900/90 border-surface-700/60 text-surface-400 hover:bg-surface-800'
+        }`}
+      >
+        <span className={`w-2 h-2 rounded-full ${showHospitals ? 'bg-rose-400 animate-pulse' : 'bg-surface-500'}`} />
+        <span className="hidden sm:inline">🏥 Hospitals</span>
+      </button>
+
+      {/* Police Stations Layer Toggle Button */}
+      <button
+        onClick={onTogglePoliceStations}
+        title={showPoliceStations ? 'Hide Police Stations Layer' : 'Show Police Stations Layer'}
+        className={`px-3 py-2 rounded-xl border text-xs font-semibold shadow-lg backdrop-blur-md transition-all duration-200 active:scale-95 flex items-center gap-2 ${
+          showPoliceStations
+            ? 'bg-blue-950/85 border-blue-500/50 text-blue-300 hover:bg-blue-900/85 shadow-blue-950/50'
+            : 'bg-surface-900/90 border-surface-700/60 text-surface-400 hover:bg-surface-800'
+        }`}
+      >
+        <span className={`w-2 h-2 rounded-full ${showPoliceStations ? 'bg-blue-400 animate-pulse' : 'bg-surface-500'}`} />
+        <span className="hidden sm:inline">🛡️ Police</span>
+      </button>
+
       {/* Live Traffic Toggle Button */}
       <button
         onClick={onToggleTraffic}

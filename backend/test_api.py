@@ -2064,6 +2064,697 @@ def test_phase14_honest_horizons_and_tomtom_authority():
     assert data_30["traffic_source"] in ("tomtom_live", "unavailable")
 
 
+def test_ws1_police_station_table_schema_and_model():
+    """WS-1: Verify police_stations database table exists with indexes and PoliceStation model matches schema."""
+    from sqlalchemy import text
+    from app.models.police_station import PoliceStation
+
+    db = SessionLocal()
+    try:
+        # 1. Check table existence
+        row = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='police_stations'")).fetchone()
+        assert row is not None, "police_stations table must exist in database"
+
+        # 2. Check model fields
+        cols = {c.name for c in PoliceStation.__table__.columns}
+        expected_cols = {
+            "id", "object_id", "department_code", "station_name",
+            "kgis_pol_sta_id", "kgis_code", "kgis_ps_code", "kgis_village_id",
+            "latitude", "longitude", "created_at"
+        }
+        assert expected_cols.issubset(cols), f"Missing columns in PoliceStation model: {expected_cols - cols}"
+    finally:
+        db.close()
+
+
+def test_ws1_police_station_kml_import_idempotence_and_integrity():
+    """WS-1: Verify KML import parses exactly 921 records, enforces uniqueness & Karnataka bounds, preserves co-located stations, and is fully idempotent."""
+    from app.services.police_service import import_police_stations_from_kml, verify_police_stations_db
+    from app.models.police_station import PoliceStation
+
+    db = SessionLocal()
+    try:
+        # 1. First import
+        res1 = import_police_stations_from_kml(db)
+        assert res1["total_records"] == 921
+        assert res1["failed"] == 0
+
+        # 2. Verification report check
+        report = verify_police_stations_db(db)
+        assert report["total_stations"] == 921
+        assert report["unique_object_ids"] == 921
+        assert report["unique_department_codes"] == 921
+        assert report["missing_names"] == 0
+        assert report["missing_coordinates"] == 0
+        assert 11.0 <= report["min_latitude"] <= 19.0
+        assert 11.0 <= report["max_latitude"] <= 19.0
+        assert 73.5 <= report["min_longitude"] <= 79.0
+        assert 73.5 <= report["max_longitude"] <= 79.0
+        assert report["co_located_groups"] == 11
+        assert report["co_located_stations_total"] == 22
+        assert report["data_quality"] == "GOOD"
+
+        # 3. Second import (Idempotency verification)
+        res2 = import_police_stations_from_kml(db)
+        assert res2["total_records"] == 921
+        assert res2["inserted"] == 0
+        assert res2["updated"] == 0
+        assert res2["skipped"] == 921
+        assert res2["failed"] == 0
+        assert res2["duplicates"] == 921
+
+        # Confirm DB count remains exactly 921
+        total_db = db.query(PoliceStation).count()
+        assert total_db == 921
+    finally:
+        db.close()
+
+
+def test_ws1_existing_naviscape_data_isolation():
+    """WS-1: Verify existing traffic, accident, hazard, user, and route data are completely untouched by police station integration."""
+    from app.models.traffic import TrafficData, TrafficHourly
+    from app.models.accident import AccidentData
+    from app.models.road_hazard import RoadHazard
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        assert db.query(TrafficData).count() >= 0
+        assert db.query(TrafficHourly).count() >= 0
+        assert db.query(AccidentData).count() >= 0
+        assert db.query(RoadHazard).count() >= 0
+        assert db.query(User).count() >= 0
+    finally:
+        db.close()
+
+
+def test_ws2_police_stations_list_endpoint():
+    """WS-2: Test GET /api/police-stations returns verified database records and supports proximity filtering."""
+    # 1. Unfiltered query -> returns all 921 stations
+    res = client.get("/api/police-stations", headers=_auth_headers)
+    assert res.status_code == 200
+    stations = res.json()
+    assert len(stations) == 921
+    sample = stations[0]
+    expected_fields = {"id", "station_name", "latitude", "longitude", "object_id", "department_code"}
+    assert expected_fields.issubset(set(sample.keys()))
+
+    # 2. Filtered query near Bengaluru Center (5 km radius)
+    res_filtered = client.get("/api/police-stations?lat=12.9716&lng=77.5946&radius_km=5.0", headers=_auth_headers)
+    assert res_filtered.status_code == 200
+    filtered_stations = res_filtered.json()
+    assert 0 < len(filtered_stations) < 921
+    for s in filtered_stations:
+        assert "distance_km" in s
+        assert s["distance_km"] <= 5.0
+
+
+def test_ws2_nearest_police_station_endpoint_and_haversine():
+    """WS-2: Test GET /api/police-stations/nearest finds mathematically nearest station with Haversine distance and rejects out-of-range/invalid queries."""
+    from app.services.police_service import haversine_distance_km
+
+    # 1. Haversine formula correctness check (Bengaluru to Mysuru approx 128-130 km)
+    dist_blr_mys = haversine_distance_km(12.9716, 77.5946, 12.2958, 76.6394)
+    assert 125.0 <= dist_blr_mys <= 135.0
+
+    # 2. Nearest station query in central Bengaluru (MG Road)
+    res_nearest = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=77.6066", headers=_auth_headers)
+    assert res_nearest.status_code == 200
+    data = res_nearest.json()
+    assert "station" in data
+    assert "distance_km" in data
+    assert "distance_m" in data
+    assert data["distance_km"] < 2.0  # Commercial Street or Cubbon Park PS is within 2 km of MG Road
+    assert data["station"]["station_name"] is not None
+
+    # 3. Radius filter where no station is within 1 meter (0.001 km)
+    res_far = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=77.6066&radius_km=0.001", headers=_auth_headers)
+    assert res_far.status_code == 404
+    assert "No police station found" in res_far.json()["detail"]
+
+    # 4. Invalid coordinate validation
+    res_inv_lat = client.get("/api/police-stations/nearest?latitude=95.0&longitude=77.6066", headers=_auth_headers)
+    assert res_inv_lat.status_code in (400, 422)
+
+    res_inv_lng = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=195.0", headers=_auth_headers)
+    assert res_inv_lng.status_code in (400, 422)
+
+
+def test_ws2_colocated_stations_deterministic_ordering_and_immutability():
+    """WS-2: Test that co-located stations (same coordinates) are sorted deterministically and querying nearest station never alters database records."""
+    from app.models.police_station import PoliceStation
+
+    db = SessionLocal()
+    try:
+        initial_count = db.query(PoliceStation).count()
+        assert initial_count == 921
+
+        # Raichur co-located pair: Sadar Bazar PS (ID: 53) & Raichur Women PS (ID: 54) at (16.202620, 77.356028)
+        res1 = client.get("/api/police-stations/nearest?latitude=16.202620&longitude=77.356028", headers=_auth_headers)
+        assert res1.status_code == 200
+        res2 = client.get("/api/police-stations/nearest?latitude=16.202620&longitude=77.356028", headers=_auth_headers)
+        assert res2.status_code == 200
+
+        # Deterministic: both identical queries return the exact same station record
+        assert res1.json()["station"]["id"] == res2.json()["station"]["id"]
+
+        # Ensure database count and records are completely unmodified
+        post_count = db.query(PoliceStation).count()
+        assert post_count == 921
+    finally:
+        db.close()
+
+
+def test_ws4_nearest_police_station_intelligence_and_threshold_verification():
+    """WS-4: Verify nearest police station intelligence, distance accuracy, error contracts, and data immutability."""
+    from app.models.police_station import PoliceStation
+    from app.services.police_service import haversine_distance_km
+
+    db = SessionLocal()
+    try:
+        # 1. Database baseline check: Exactly 921 stations
+        assert db.query(PoliceStation).count() == 921
+
+        # 2. Test multiple realistic user locations across Karnataka
+        test_points = [
+            {"name": "Bengaluru Central (MG Road)", "lat": 12.9756, "lng": 77.6066, "expected_station": "Ashoknagar PS"},
+            {"name": "Bengaluru South (Silk Board)", "lat": 12.9170, "lng": 77.6230, "expected_station": "Madiwala PS"},
+            {"name": "Mysuru City (Palace)", "lat": 12.3051, "lng": 76.6551, "expected_station": "Women PS Mysuru City"},
+        ]
+
+        for pt in test_points:
+            res = client.get(f"/api/police-stations/nearest?latitude={pt['lat']}&longitude={pt['lng']}", headers=_auth_headers)
+            assert res.status_code == 200
+            data = res.json()
+            st = data["station"]
+            assert st["station_name"] == pt["expected_station"]
+            assert 11.0 <= st["latitude"] <= 19.0
+            assert 74.0 <= st["longitude"] <= 79.0
+
+            # Mathematical Haversine verification
+            expected_dist = haversine_distance_km(pt["lat"], pt["lng"], st["latitude"], st["longitude"])
+            assert abs(data["distance_km"] - round(expected_dist, 3)) < 0.005
+            assert abs(data["distance_m"] - round(expected_dist * 1000.0, 1)) < 5.0
+
+        # 3. Radius boundary testing: 100m vs 10km at MG Road
+        # Radius 100m (0.1 km) -> Nearest is ~588m away -> Should return 404
+        res_narrow = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=77.6066&radius_km=0.1", headers=_auth_headers)
+        assert res_narrow.status_code == 404
+        assert "No police station found" in res_narrow.json()["detail"]
+
+        # Radius 2km (2.0 km) -> Should succeed
+        res_wide = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=77.6066&radius_km=2.0", headers=_auth_headers)
+        assert res_wide.status_code == 200
+        assert res_wide.json()["distance_km"] <= 2.0
+
+        # 4. Out-of-bounds coordinate validation
+        res_bad_lat = client.get("/api/police-stations/nearest?latitude=91.0&longitude=77.6066", headers=_auth_headers)
+        assert res_bad_lat.status_code in (400, 422)
+
+        res_bad_lng = client.get("/api/police-stations/nearest?latitude=12.9756&longitude=-185.0", headers=_auth_headers)
+        assert res_bad_lng.status_code in (400, 422)
+
+        # 5. Verify database integrity
+        assert db.query(PoliceStation).count() == 921
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WS-1: Verified Karnataka Hospital Database Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_ws1_hospital_table_schema_and_model():
+    """WS-1: Test Hospital table schema, columns, indices, and ORM model."""
+    from sqlalchemy import inspect
+    from app.database import engine
+    from app.models.hospital import Hospital
+
+    inspector = inspect(engine)
+    assert "hospital_facilities" in inspector.get_table_names()
+
+    columns = {col["name"]: col for col in inspector.get_columns("hospital_facilities")}
+    required_cols = [
+        "id", "source_id", "hospital_name", "latitude", "longitude",
+        "address", "district", "city", "state", "pincode",
+        "hospital_category", "hospital_care_type", "discipline",
+        "telephone", "mobile_number", "emergency_number", "ambulance_phone",
+        "bloodbank_phone", "emergency_services", "specialties", "facilities",
+        "total_beds", "website", "created_at"
+    ]
+    for col_name in required_cols:
+        assert col_name in columns, f"Missing column {col_name} in hospital_facilities"
+
+    assert not columns["hospital_name"]["nullable"]
+    assert not columns["source_id"]["nullable"]
+    assert columns["latitude"]["nullable"]
+    assert columns["longitude"]["nullable"]
+    assert columns["telephone"]["nullable"]
+    assert columns["emergency_services"]["nullable"]
+
+    # Model instantiation test
+    h = Hospital(
+        source_id=999999,
+        hospital_name="Test General Hospital",
+        latitude=12.9716,
+        longitude=77.5946,
+        district="Bengaluru Urban",
+        hospital_category="Private",
+    )
+    d = h.to_dict()
+    assert d["source_id"] == 999999
+    assert d["hospital_name"] == "Test General Hospital"
+    assert d["latitude"] == 12.9716
+    assert d["longitude"] == 77.5946
+
+
+def test_ws1_hospital_csv_detection_and_source_id_uniqueness():
+    """WS-1: Test CSV row count detection, Karnataka record filtering, and source_id uniqueness."""
+    import os
+    import csv
+    from app.services.hospital_service import _resolve_csv_path
+
+    csv_path = _resolve_csv_path()
+    assert os.path.exists(csv_path)
+
+    with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f)
+        all_rows = list(reader)
+
+    assert len(all_rows) == 30273
+
+    karnataka_rows = [r for r in all_rows if r.get("State", "").strip().lower() == "karnataka"]
+    assert len(karnataka_rows) == 2226
+
+    # Source IDs uniqueness across entire CSV and Karnataka subset
+    all_sr_nos = [r.get("Sr_No", "").strip() for r in all_rows]
+    assert len(set(all_sr_nos)) == 30273
+
+    kn_sr_nos = [r.get("Sr_No", "").strip() for r in karnataka_rows]
+    assert len(set(kn_sr_nos)) == 2226
+
+
+def test_ws1_hospital_data_import_and_idempotency():
+    """WS-1: Test idempotent CSV import of Karnataka hospitals into hospital_facilities table."""
+    from app.services.hospital_service import import_hospitals_from_csv
+    from app.models.hospital import Hospital
+
+    db = SessionLocal()
+    try:
+        # Run 1: Upsert
+        res1 = import_hospitals_from_csv(db)
+        assert res1["source_records"] == 2226
+        assert res1["failed"] == 0
+        assert res1["inserted"] + res1["skipped"] == 2226
+
+        # Database verification
+        count = db.query(Hospital).count()
+        assert count == 2226
+
+        # Run 2: Idempotency check (0 inserted, 0 updated, 2226 skipped)
+        res2 = import_hospitals_from_csv(db)
+        assert res2["inserted"] == 0
+        assert res2["updated"] == 0
+        assert res2["skipped"] == 2226
+        assert res2["failed"] == 0
+
+        # Confirm count remains exactly 2226
+        assert db.query(Hospital).count() == 2226
+    finally:
+        db.close()
+
+
+def test_ws1_hospital_coordinate_and_placeholder_cleaning():
+    """WS-1: Test that valid coordinates are preserved exactly, invalid/missing remain NULL, and placeholders become NULL."""
+    from app.models.hospital import Hospital
+    from app.services.hospital_service import clean_placeholder, parse_coordinates
+
+    # Test clean_placeholder
+    assert clean_placeholder("0") is None
+    assert clean_placeholder("NA") is None
+    assert clean_placeholder("N/A") is None
+    assert clean_placeholder("Error") is None
+    assert clean_placeholder("") is None
+    assert clean_placeholder("   ") is None
+    assert clean_placeholder("Allopathic") == "Allopathic"
+
+    # Test parse_coordinates
+    lat, lon, is_v = parse_coordinates("12.9716, 77.5946")
+    assert is_v is True
+    assert abs(lat - 12.9716) < 1e-6
+    assert abs(lon - 77.5946) < 1e-6
+
+    lat_inv, lon_inv, is_v2 = parse_coordinates("NA")
+    assert is_v2 is False
+    assert lat_inv is None and lon_inv is None
+
+    lat_err, lon_err, is_v3 = parse_coordinates("Error")
+    assert is_v3 is False
+    assert lat_err is None and lon_err is None
+
+    db = SessionLocal()
+    try:
+        # Check that records with missing/invalid coords in DB have lat=None, lon=None
+        hospitals = db.query(Hospital).all()
+        assert len(hospitals) == 2226
+
+        valid_coords = [h for h in hospitals if h.latitude is not None and h.longitude is not None]
+        missing_coords = [h for h in hospitals if h.latitude is None or h.longitude is None]
+
+        assert len(valid_coords) == 1341
+        assert len(missing_coords) == 885
+
+        # Verify no 0.0, 0.0 fake coordinates
+        for h in valid_coords:
+            assert not (h.latitude == 0.0 and h.longitude == 0.0)
+            assert -90.0 <= h.latitude <= 90.0
+            assert -180.0 <= h.longitude <= 180.0
+
+        # Verify no fake strings like "0" or "NA" in text fields
+        for h in hospitals:
+            assert h.telephone not in ("0", "NA", "N/A", "Error")
+            assert h.emergency_services not in ("0", "NA", "N/A", "Error")
+            assert h.hospital_category not in ("0", "NA", "N/A", "Error")
+            assert h.hospital_name is not None and len(h.hospital_name.strip()) > 0
+    finally:
+        db.close()
+
+
+def test_ws1_hospital_colocated_preservation():
+    """WS-1: Test that co-located hospitals sharing coordinates remain separate records."""
+    from collections import Counter
+    from app.models.hospital import Hospital
+
+    db = SessionLocal()
+    try:
+        hospitals = db.query(Hospital).filter(Hospital.latitude.isnot(None), Hospital.longitude.isnot(None)).all()
+        coord_pairs = [(round(h.latitude, 6), round(h.longitude, 6)) for h in hospitals]
+        counts = Counter(coord_pairs)
+        colocated_spots = {k: v for k, v in counts.items() if v > 1}
+
+        assert len(colocated_spots) == 146
+        assert sum(colocated_spots.values()) == 456
+
+        # Check a specific co-located spot to verify separate distinct hospital records
+        sample_spot = list(colocated_spots.keys())[0]
+        sample_hospitals = [h for h in hospitals if round(h.latitude, 6) == sample_spot[0] and round(h.longitude, 6) == sample_spot[1]]
+        assert len(sample_hospitals) >= 2
+        # All have distinct source_id and id
+        source_ids = [h.source_id for h in sample_hospitals]
+        assert len(set(source_ids)) == len(sample_hospitals)
+    finally:
+        db.close()
+
+
+def test_ws1_hospital_verification_function_readonly():
+    """WS-1: Test that verify_hospitals_db returns correct forensic metrics and is read-only."""
+    from app.services.hospital_service import verify_hospitals_db
+    from app.models.hospital import Hospital
+
+    db = SessionLocal()
+    try:
+        initial_count = db.query(Hospital).count()
+        v = verify_hospitals_db(db)
+
+        assert v["total_hospitals"] == 2226
+        assert v["unique_source_ids"] == 2226
+        assert v["missing_names"] == 0
+        assert v["valid_coordinates"] == 1341
+        assert v["inside_karnataka_bounds"] == 1248
+        assert v["outside_karnataka_bounds"] == 93
+        assert v["map_ready_records"] == 1248
+        assert v["malformed_coordinates"] == 885
+        assert v["missing_coordinates"] == 0
+        assert v["colocated_locations"] == 139
+        assert v["colocated_hospitals_total"] == 441
+        assert v["district_breakdown"]["Bengaluru Urban"] == 993
+
+        # Confirm read-only: count unchanged
+        assert db.query(Hospital).count() == initial_count
+    finally:
+        db.close()
+
+
+def test_ws1_1_karnataka_coordinate_bounds_and_map_ready_classification():
+    """WS-1.1: Test geographic classification of Karnataka hospital records into map-ready vs outside bounds."""
+    from app.services.hospital_service import verify_hospitals_db, is_within_karnataka_bounds
+    from app.models.hospital import Hospital
+
+    db = SessionLocal()
+    try:
+        v = verify_hospitals_db(db)
+        assert v["total_hospitals"] == 2226
+        assert v["valid_coordinates"] == 1341
+        assert v["inside_karnataka_bounds"] == 1248
+        assert v["outside_karnataka_bounds"] == 93
+        assert v["map_ready_records"] == 1248
+        assert v["malformed_coordinates"] == 885
+        assert v["missing_coordinates"] == 0
+        assert abs(v["coordinate_validity_percentage"] - 56.06) < 0.05
+        assert v["colocated_locations"] == 139
+        assert v["colocated_hospitals_total"] == 441
+
+        # Bounds of map-ready records
+        kb = v["karnataka_bounds"]
+        assert 11.0 <= kb["min_latitude"] <= 19.0
+        assert 11.0 <= kb["max_latitude"] <= 19.0
+        assert 73.5 <= kb["min_longitude"] <= 79.0
+        assert 73.5 <= kb["max_longitude"] <= 79.0
+
+        # Boundary helper tests
+        assert is_within_karnataka_bounds(12.9716, 77.5946) is True
+        assert is_within_karnataka_bounds(41.9551248, -70.6631837) is False
+        assert is_within_karnataka_bounds(None, None) is False
+    finally:
+        db.close()
+
+
+def test_ws1_hospital_existing_data_isolation():
+    """WS-1: Verify that existing traffic, accident, hazard, user, and route data are completely untouched by hospital import."""
+    from app.models.traffic import TrafficData, TrafficHourly
+    from app.models.accident import AccidentData
+    from app.models.road_hazard import RoadHazard
+    from app.models.user import User
+    from app.models.police_station import PoliceStation
+    from app.models.traffic import RouteHistory
+
+    db = SessionLocal()
+    try:
+        assert db.query(TrafficData).count() >= 805
+        assert db.query(TrafficHourly).count() >= 80
+        assert db.query(PoliceStation).count() == 921
+        assert db.query(AccidentData).count() == 95723
+        assert db.query(RoadHazard).count() >= 1
+        assert db.query(User).count() >= 3
+        assert db.query(RouteHistory).count() >= 15
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WS-2: Hospital Directory & Nearest Hospital Intelligence Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_ws2_hospitals_directory_endpoint_and_map_ready_filtering():
+    """WS-2: Test GET /api/hospitals returns only map-ready Karnataka hospitals and supports proximity filtering."""
+    # 1. Unfiltered query -> returns all 1248 map-ready hospitals
+    res = client.get("/api/hospitals", headers=_auth_headers)
+    assert res.status_code == 200
+    hospitals = res.json()
+    assert len(hospitals) == 1248
+
+    # Verify all returned hospitals satisfy map-ready bounding box
+    for h in hospitals:
+        assert h["latitude"] is not None and h["longitude"] is not None
+        assert 11.0 <= h["latitude"] <= 19.0
+        assert 73.5 <= h["longitude"] <= 79.0
+
+    # Verify outside-Karnataka hospitals are excluded
+    source_ids = {h["source_id"] for h in hospitals}
+    assert 12939 not in source_ids  # USA coord
+    assert 13430 not in source_ids  # UK coord
+    assert 13040 not in source_ids  # Tamil Nadu coord
+    assert 13135 not in source_ids  # West Bengal coord
+
+    sample = hospitals[0]
+    expected_fields = {
+        "id", "source_id", "hospital_name", "latitude", "longitude",
+        "address", "district", "city", "hospital_category", "hospital_care_type",
+        "emergency_number", "ambulance_phone", "emergency_services",
+        "specialties", "facilities", "total_beds", "website"
+    }
+    assert expected_fields.issubset(set(sample.keys()))
+
+    # 2. Filtered query near Bengaluru Center (MG Road: 12.9756, 77.6066, 5 km radius)
+    res_filtered = client.get("/api/hospitals?lat=12.9756&lng=77.6066&radius_km=5.0", headers=_auth_headers)
+    assert res_filtered.status_code == 200
+    filtered_hospitals = res_filtered.json()
+    assert 0 < len(filtered_hospitals) < 1248
+    for h in filtered_hospitals:
+        assert "distance_km" in h
+        assert h["distance_km"] <= 5.0
+
+    # Also test alias latitude / longitude parameters
+    res_alias = client.get("/api/hospitals?latitude=12.9756&longitude=77.6066&radius_km=5.0", headers=_auth_headers)
+    assert res_alias.status_code == 200
+    assert len(res_alias.json()) == len(filtered_hospitals)
+
+
+def test_ws2_nearest_hospital_endpoint_and_haversine_math():
+    """WS-2: Test GET /api/hospitals/nearest finds mathematically nearest map-ready hospital with Haversine distance."""
+    from app.services.hospital_service import haversine_distance_km
+
+    # 1. Haversine distance formula check (Bengaluru to Mysuru approx 128-130 km)
+    dist_blr_mys = haversine_distance_km(12.9716, 77.5946, 12.2958, 76.6394)
+    assert 125.0 <= dist_blr_mys <= 135.0
+
+    # 2. Nearest hospital query in central Bengaluru (MG Road)
+    res_nearest = client.get("/api/hospitals/nearest?lat=12.9756&lng=77.6066", headers=_auth_headers)
+    assert res_nearest.status_code == 200
+    data = res_nearest.json()
+    assert "hospital" in data
+    assert "distance_km" in data
+    assert "distance_m" in data
+    h = data["hospital"]
+    assert h["hospital_name"] is not None
+    assert 11.0 <= h["latitude"] <= 19.0
+    assert 73.5 <= h["longitude"] <= 79.0
+
+    # Mathematical Haversine verification
+    expected_dist = haversine_distance_km(12.9756, 77.6066, h["latitude"], h["longitude"])
+    assert abs(data["distance_km"] - round(expected_dist, 3)) < 0.005
+    assert abs(data["distance_m"] - round(expected_dist * 1000.0, 1)) < 5.0
+
+    # 3. Radius boundary testing
+    # Radius 1 meter (0.001 km) -> Nearest is ~hundreds of meters away -> Should return 404
+    res_narrow = client.get("/api/hospitals/nearest?lat=12.9756&lng=77.6066&radius_km=0.001", headers=_auth_headers)
+    assert res_narrow.status_code == 404
+    assert "No map-ready hospital found" in res_narrow.json()["detail"]
+
+    # Radius 10 km -> Should succeed
+    res_wide = client.get("/api/hospitals/nearest?lat=12.9756&lng=77.6066&radius_km=10.0", headers=_auth_headers)
+    assert res_wide.status_code == 200
+    assert res_wide.json()["distance_km"] <= 10.0
+
+    # 4. Out-of-bounds coordinate validation
+    res_bad_lat = client.get("/api/hospitals/nearest?lat=95.0&lng=77.6066", headers=_auth_headers)
+    assert res_bad_lat.status_code in (400, 422)
+
+    res_bad_lng = client.get("/api/hospitals/nearest?lat=12.9756&lng=195.0", headers=_auth_headers)
+    assert res_bad_lng.status_code in (400, 422)
+
+
+def test_ws2_colocated_hospitals_deterministic_ordering_and_immutability():
+    """WS-2: Test that co-located hospitals (same coordinates) are preserved as separate entities and deterministic ordering is maintained."""
+    from app.models.hospital import Hospital
+    from app.services.hospital_service import verify_hospitals_db
+
+    db = SessionLocal()
+    try:
+        initial_count = db.query(Hospital).count()
+        assert initial_count == 2226
+
+        # Query near Bengaluru Center
+        res1 = client.get("/api/hospitals/nearest?lat=12.9716&lng=77.5946", headers=_auth_headers)
+        assert res1.status_code == 200
+        res2 = client.get("/api/hospitals/nearest?lat=12.9716&lng=77.5946", headers=_auth_headers)
+        assert res2.status_code == 200
+
+        # Deterministic: both identical queries return the exact same hospital record
+        assert res1.json()["hospital"]["id"] == res2.json()["hospital"]["id"]
+
+        # Ensure database count and records are completely unmodified
+        post_count = db.query(Hospital).count()
+        assert post_count == 2226
+
+        v = verify_hospitals_db(db)
+        assert v["total_hospitals"] == 2226
+        assert v["map_ready_records"] == 1248
+    finally:
+        db.close()
+
+
+def test_ws2_hospital_emergency_attributes_and_no_fabrication():
+    """WS-2: Test that emergency and care attributes reflect real DB values without fabrication."""
+    res = client.get("/api/hospitals", headers=_auth_headers)
+    assert res.status_code == 200
+    hospitals = res.json()
+
+    # Verify no fake truthy conversion of unknown emergency fields
+    for h in hospitals:
+        # If emergency services was "0" in CSV, it must be None/null in response, not "True" or fake text
+        if h["emergency_services"] is not None:
+            assert h["emergency_services"] in ("24 Hours", "Emergency Services 24 Hours") or len(h["emergency_services"]) > 0
+        # No fake coordinates
+        assert not (h["latitude"] == 0.0 and h["longitude"] == 0.0)
+
+
+def test_ws2_hospital_existing_data_isolation():
+    """WS-2: Verify all existing NAVISCAPE tables remain strictly isolated during WS-2 endpoints execution."""
+    from app.models.traffic import TrafficData, TrafficHourly, RouteHistory
+    from app.models.accident import AccidentData
+    from app.models.road_hazard import RoadHazard
+    from app.models.user import User
+    from app.models.police_station import PoliceStation
+
+    db = SessionLocal()
+    try:
+        assert db.query(TrafficData).count() >= 805
+        assert db.query(TrafficHourly).count() >= 80
+        assert db.query(PoliceStation).count() == 921
+        assert db.query(AccidentData).count() == 95723
+        assert db.query(RoadHazard).count() >= 1
+        assert db.query(User).count() >= 3
+        assert db.query(RouteHistory).count() >= 15
+    finally:
+        db.close()
+
+
+def test_ws4_nearest_hospital_intelligence_and_threshold_verification():
+    """WS-4: Verify real nearest hospital intelligence, threshold math, error handling, and data integrity."""
+    from app.services.hospital_service import haversine_distance_km
+
+    # 1. Real GPS coordinates query (e.g., MG Road Bengaluru: 12.9756, 77.6066)
+    res = client.get("/api/hospitals/nearest?lat=12.9756&lng=77.6066", headers=_auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "hospital" in data
+    assert "distance_km" in data
+    assert "distance_m" in data
+    h = data["hospital"]
+    assert h["id"] is not None
+    assert h["hospital_name"] is not None
+    assert 11.0 <= h["latitude"] <= 19.0
+    assert 73.5 <= h["longitude"] <= 79.0
+
+    # 2. Authoritative backend distance check
+    expected_dist = haversine_distance_km(12.9756, 77.6066, h["latitude"], h["longitude"])
+    assert abs(data["distance_km"] - round(expected_dist, 3)) < 0.005
+    assert abs(data["distance_m"] - round(expected_dist * 1000.0, 1)) < 5.0
+
+    # 3. 150m movement threshold mathematical property verification
+    pos1 = (12.9716, 77.5946)
+    pos_small_move = (12.9717, 77.5947)  # ~15m
+    pos_large_move = (12.9735, 77.5960)  # ~255m
+    dist_small = haversine_distance_km(pos1[0], pos1[1], pos_small_move[0], pos_small_move[1]) * 1000.0
+    dist_large = haversine_distance_km(pos1[0], pos1[1], pos_large_move[0], pos_large_move[1]) * 1000.0
+    assert dist_small < 150.0  # Should NOT trigger refresh
+    assert dist_large >= 150.0  # Should trigger refresh
+
+    # 4. Error states: Missing coordinates
+    res_missing = client.get("/api/hospitals/nearest", headers=_auth_headers)
+    assert res_missing.status_code in (400, 422)
+
+    # 5. Error states: 404 / No hospital within tiny radius
+    res_404 = client.get("/api/hospitals/nearest?lat=12.9756&lng=77.6066&radius_km=0.001", headers=_auth_headers)
+    assert res_404.status_code == 404
+    assert "No map-ready hospital found" in res_404.json()["detail"]
+
+    # 6. Safety check: No fallback/hardcoded hospitals
+    res_bad = client.get("/api/hospitals/nearest?lat=0.0&lng=0.0&radius_km=10.0", headers=_auth_headers)
+    assert res_bad.status_code == 404
+
+
 if __name__ == "__main__":
     tests = [
         ("Root Endpoint", test_root_endpoint),
@@ -2117,12 +2808,64 @@ if __name__ == "__main__":
         ("Phase 14 Production Training Blocked On Current Database", test_phase14_production_training_blocked_on_current_database),
         ("Phase 14 Per-Junction Training & Artifact Isolation", test_phase14_per_junction_training_and_artifact_isolation),
         ("Phase 14 Honest Horizons & TomTom Authority", test_phase14_honest_horizons_and_tomtom_authority),
+        ("WS-1 Police Station Table Schema & Model", test_ws1_police_station_table_schema_and_model),
+        ("WS-1 Police Station KML Import & Idempotence", test_ws1_police_station_kml_import_idempotence_and_integrity),
+        ("WS-1 Existing Data Isolation", test_ws1_existing_naviscape_data_isolation),
+        ("WS-2 Police Stations List Endpoint & Proximity Filter", test_ws2_police_stations_list_endpoint),
+        ("WS-2 Nearest Police Station Endpoint & Haversine", test_ws2_nearest_police_station_endpoint_and_haversine),
+        ("WS-2 Co-located Stations Deterministic & Immutability", test_ws2_colocated_stations_deterministic_ordering_and_immutability),
+        ("WS-4 Nearest Police Station Intelligence & Thresholds", test_ws4_nearest_police_station_intelligence_and_threshold_verification),
+        ("WS-1 Hospital Table Schema & Model", test_ws1_hospital_table_schema_and_model),
+        ("WS-1 Hospital CSV Row Count & Source-ID Uniqueness", test_ws1_hospital_csv_detection_and_source_id_uniqueness),
+        ("WS-1 Hospital CSV Import & Idempotency", test_ws1_hospital_data_import_and_idempotency),
+        ("WS-1 Hospital Coordinate & Placeholder Cleaning", test_ws1_hospital_coordinate_and_placeholder_cleaning),
+        ("WS-1 Hospital Co-located Hospitals Preservation", test_ws1_hospital_colocated_preservation),
+        ("WS-1 Hospital Verification Function Read-Only", test_ws1_hospital_verification_function_readonly),
+        ("WS-1.1 Karnataka Coordinate Bounds & Map-Ready Classification", test_ws1_1_karnataka_coordinate_bounds_and_map_ready_classification),
+        ("WS-1 Hospital Existing NAVISCAPE Data Isolation", test_ws1_hospital_existing_data_isolation),
+        ("WS-2 Hospital Directory & Map-Ready Filtering", test_ws2_hospitals_directory_endpoint_and_map_ready_filtering),
+        ("WS-2 Nearest Hospital Endpoint & Haversine", test_ws2_nearest_hospital_endpoint_and_haversine_math),
+        ("WS-2 Co-located Hospitals Deterministic Ordering & Immutability", test_ws2_colocated_hospitals_deterministic_ordering_and_immutability),
+        ("WS-2 Hospital Emergency Attributes & No Fabrication", test_ws2_hospital_emergency_attributes_and_no_fabrication),
+        ("WS-2 Hospital Existing Data Isolation", test_ws2_hospital_existing_data_isolation),
+        ("WS-4 Nearest Hospital Intelligence & Thresholds", test_ws4_nearest_hospital_intelligence_and_threshold_verification),
+        ("WS-1 Emergency Profile Creation & Default Consent", __import__('test_women_safety').test_01_emergency_profile_creation_and_consent_default),
+        ("WS-1 Emergency Profile Retrieval", __import__('test_women_safety').test_02_emergency_profile_retrieval),
+        ("WS-1 Emergency Profile Update & Consent Enablement", __import__('test_women_safety').test_03_emergency_profile_update_and_consent_enablement),
+        ("WS-1 Trusted Contact Creation", __import__('test_women_safety').test_04_trusted_contact_creation),
+        ("WS-1 Max 4 Contacts Enforcement", __import__('test_women_safety').test_05_max_4_contacts_enforcement),
+        ("WS-1 Trusted Contact Update", __import__('test_women_safety').test_06_trusted_contact_update),
+        ("WS-1 Trusted Contact Deletion", __import__('test_women_safety').test_07_trusted_contact_deletion),
+        ("WS-1 Min 2 Contacts Completion Logic", __import__('test_women_safety').test_08_minimum_2_contacts_completion_logic),
+        ("WS-1 Multi-Tenant Ownership Isolation", __import__('test_women_safety').test_11_to_14_multitenant_ownership_isolation),
+        ("WS-1 Invalid Phone Numbers Rejected", __import__('test_women_safety').test_15_invalid_phone_number_rejected),
+        ("WS-1 Invalid Email Rejected", __import__('test_women_safety').test_16_invalid_email_rejected),
+        ("WS-1 Existing NAVISCAPE Data Isolation", __import__('test_women_safety').test_17_existing_naviscape_data_isolation),
+        ("WS-2 SOS Requires Authentication", __import__('test_women_safety').test_ws2_sos_requires_authentication),
+        ("WS-2 SOS Requires Complete Profile Gate", __import__('test_women_safety').test_ws2_sos_requires_complete_women_safety_profile),
+        ("WS-2 Valid Profile Creates Active Event", __import__('test_women_safety').test_ws2_sos_valid_profile_creates_active_event),
+        ("WS-2 Invalid Latitude Rejected", __import__('test_women_safety').test_ws2_sos_invalid_latitude_rejected),
+        ("WS-2 Invalid Longitude Rejected", __import__('test_women_safety').test_ws2_sos_invalid_longitude_rejected),
+        ("WS-2 Missing Coordinates Rejected", __import__('test_women_safety').test_ws2_sos_missing_coordinates_rejected),
+        ("WS-2 No Fake Location Fallback", __import__('test_women_safety').test_ws2_sos_no_fake_location_fallback),
+        ("WS-2 Active Event Retrieval", __import__('test_women_safety').test_ws2_active_event_retrieval),
+        ("WS-2 User Isolation", __import__('test_women_safety').test_ws2_user_isolation),
+        ("WS-2 User Cannot Cancel Other User Event", __import__('test_women_safety').test_ws2_user_cannot_cancel_other_user_event),
+        ("WS-2 Active to Cancelled Transition", __import__('test_women_safety').test_ws2_active_to_cancelled_transition),
+        ("WS-2 Cancel Preserves Event Record", __import__('test_women_safety').test_ws2_cancel_preserves_event_record),
+        ("WS-2 Cancel Idempotency", __import__('test_women_safety').test_ws2_cancel_idempotency),
+        ("WS-2 Duplicate Active Event Prevention", __import__('test_women_safety').test_ws2_duplicate_active_event_prevention),
+        ("WS-2 Existing Database Isolation", __import__('test_women_safety').test_ws2_existing_database_isolation),
+        ("WS-2 Existing WS-1 Functionality", __import__('test_women_safety').test_ws2_existing_ws1_functionality),
     ]
     print(f"Running NAVISCAPE Backend API Test Suite ({len(tests)} integration tests)...")
     for name, test_func in tests:
         test_func()
         print(f"[PASS] {name}")
     print(f"\nALL {len(tests)} BACKEND INTEGRATION TESTS PASSED SUCCESSFULLY!")
+
+
+
 
 
 

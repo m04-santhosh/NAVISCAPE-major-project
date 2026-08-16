@@ -10,6 +10,7 @@ import Analytics from './pages/Analytics';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPin from './pages/ForgotPin';
+import WomenSafety from './pages/WomenSafety';
 
 /** Route guard: redirects unauthenticated users to /login */
 function ProtectedRoute() {
@@ -107,6 +108,7 @@ export default function App() {
               <Route element={<AppLayout />}>
                 <Route path="/navigate" element={<Navigation />} />
                 <Route path="/analytics" element={<Analytics />} />
+                <Route path="/women-safety" element={<WomenSafety />} />
               </Route>
             </Route>
 

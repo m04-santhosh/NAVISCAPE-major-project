@@ -36,6 +36,9 @@ class User(Base):
 
     # ── Relationships ─────────────────────────────────────────────────────────
     route_history = relationship("RouteHistory", back_populates="user", cascade="all, delete-orphan")
+    emergency_profile = relationship("EmergencyProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    trusted_contacts = relationship("TrustedContact", back_populates="user", cascade="all, delete-orphan")
+    emergency_events = relationship("EmergencyEvent", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, email='{self.email}', verified={self.email_verified})>"

@@ -16,6 +16,10 @@ from .traffic import TrafficData, RouteHistory  # RouteHistory must be imported 
 from .otp import OTPRecord
 from .accident import AccidentData
 from .road_hazard import RoadHazard
+from .police_station import PoliceStation
+from .hospital import Hospital
+from .emergency_profile import EmergencyProfile, TrustedContact
+from .emergency_event import EmergencyEvent
 
 __all__ = [
     "User",
@@ -24,4 +28,9 @@ __all__ = [
     "OTPRecord",
     "AccidentData",
     "RoadHazard",
+    "PoliceStation",
+    "Hospital",
+    "EmergencyProfile",
+    "TrustedContact",
+    "EmergencyEvent",
 ]

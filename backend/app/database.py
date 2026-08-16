@@ -194,6 +194,10 @@ def init_db():
     # Register all models so Base.metadata knows about them
     from .models import user, traffic, accident, road_hazard  # noqa: F401
     from .models import otp  # noqa: F401
+    from .models import police_station  # noqa: F401
+    from .models import hospital  # noqa: F401
+    from .models import emergency_profile  # noqa: F401
+    from .models import emergency_event  # noqa: F401
 
     # Run migrations BEFORE create_all so the table structure is correct
     _migrate_accident_table()

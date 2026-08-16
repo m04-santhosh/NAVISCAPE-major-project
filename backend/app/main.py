@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import init_db, get_db
-from .routers import auth, navigation, traffic, prediction, accidents, road_hazard
+from .routers import auth, navigation, traffic, prediction, accidents, road_hazard, police_station, hospital, women_safety
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,9 @@ app.include_router(traffic.router)
 app.include_router(prediction.router)
 app.include_router(accidents.router)
 app.include_router(road_hazard.router)
+app.include_router(police_station.router)
+app.include_router(hospital.router)
+app.include_router(women_safety.router)
 
 
 @app.get("/", tags=["Root"])
