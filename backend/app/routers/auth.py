@@ -50,11 +50,20 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract the best-available client IP from the request."""
+    """Extract the best-available client IP from the request headers or connection."""
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if cf_ip and cf_ip.strip():
+        return cf_ip.strip()
+
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip and real_ip.strip():
+        return real_ip.strip()
+
     forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
+    if forwarded_for and forwarded_for.strip():
         return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+
+    return request.client.host if (request.client and request.client.host) else "unknown"
 
 
 def _normalize_email(email: str) -> str:

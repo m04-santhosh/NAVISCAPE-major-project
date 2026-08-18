@@ -84,8 +84,8 @@ class Settings:
     OTP_EXPIRE_MINUTES: int = int(os.getenv("OTP_EXPIRE_MINUTES", "5"))
     OTP_MAX_ATTEMPTS: int = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
     OTP_RESEND_COOLDOWN_SECONDS: int = int(os.getenv("OTP_RESEND_COOLDOWN_SECONDS", "60"))
-    OTP_MAX_PER_EMAIL_PER_HOUR: int = int(os.getenv("OTP_MAX_PER_EMAIL_PER_HOUR", "5"))
-    OTP_MAX_PER_IP_PER_HOUR: int = int(os.getenv("OTP_MAX_PER_IP_PER_HOUR", "10"))
+    OTP_MAX_PER_EMAIL_PER_HOUR: int = int(os.getenv("OTP_MAX_PER_EMAIL_PER_HOUR", "10"))
+    OTP_MAX_PER_IP_PER_HOUR: int = int(os.getenv("OTP_MAX_PER_IP_PER_HOUR", "30"))
 
     # Verification / Reset token TTL (seconds)
     VERIFICATION_TOKEN_EXPIRE_SECONDS: int = int(os.getenv("VERIFICATION_TOKEN_EXPIRE_SECONDS", "600"))  # 10 min

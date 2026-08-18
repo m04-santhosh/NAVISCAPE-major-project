@@ -42,6 +42,8 @@ def _clean_ip_log():
 
 def _check_ip_rate_limit(client_ip: str) -> bool:
     """Returns True if IP is within allowed limit, False if rate-limited."""
+    if not client_ip or client_ip == "unknown":
+        return True
     _clean_ip_log()
     count = len(_ip_request_log.get(client_ip, []))
     return count < settings.OTP_MAX_PER_IP_PER_HOUR
@@ -49,7 +51,8 @@ def _check_ip_rate_limit(client_ip: str) -> bool:
 
 def _record_ip_request(client_ip: str):
     """Record an OTP request for this IP."""
-    _ip_request_log[client_ip].append(time.monotonic())
+    if client_ip and client_ip != "unknown":
+        _ip_request_log[client_ip].append(time.monotonic())
 
 
 # ── OTP helpers ───────────────────────────────────────────────────────────────
@@ -199,12 +202,12 @@ def send_otp(
             status_code=429,
         )
 
-    # ── Invalidate previous OTPs for this email+purpose ──────────────────────
+    # ── Invalidate previous unverified OTPs for this email+purpose ────────────
     db.query(OTPRecord).filter(
         OTPRecord.email == email,
         OTPRecord.purpose == purpose,
         OTPRecord.verified == False,
-    ).delete(synchronize_session=False)
+    ).delete(synchronize_session="fetch")
 
     # ── Generate and store new OTP ────────────────────────────────────────────
     otp_plain = _generate_otp()
