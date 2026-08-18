@@ -44,16 +44,24 @@ class Settings:
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 hours
 
-    # CORS — configurable via comma-separated CORS_ORIGINS env var (e.g. "https://app.naviscape.com,https://naviscape.vercel.app")
+    # CORS — configurable via comma-separated CORS_ORIGINS env var (e.g. "https://naviscape.vercel.app")
     # Wildcard '*' is disallowed for production security.
-    CORS_ORIGINS: list = (
-        [origin.strip() for origin in os.getenv("CORS_ORIGINS").split(",") if origin.strip() and origin.strip() != "*"]
-        if os.getenv("CORS_ORIGINS")
-        else [
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "http://127.0.0.1:5173",
-        ]
+    _raw_cors: str = os.getenv("CORS_ORIGINS", "")
+    _parsed_cors: list = [
+        origin.strip().strip("'\"").rstrip("/")
+        for origin in _raw_cors.split(",")
+        if origin.strip().strip("'\"").rstrip("/") and origin.strip().strip("'\"") != "*"
+    ]
+    CORS_ORIGINS: list = list(
+        dict.fromkeys(
+            _parsed_cors
+            + [
+                "http://localhost:5173",
+                "http://localhost:3000",
+                "http://127.0.0.1:5173",
+                "https://naviscape.vercel.app",
+            ]
+        )
     )
 
     # ML Model Paths
