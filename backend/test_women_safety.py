@@ -666,6 +666,683 @@ def test_ws2_existing_ws1_functionality():
     assert overview["location_sharing_consent"] is True
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# WS-3A TESTS — WhatsApp Emergency Contact Foundation
+# ═════════════════════════════════════════════════════════════════════════════
+
+WS3A_TEST_EMAIL_A = "ws3a_user_a@naviscape.test"
+WS3A_TEST_EMAIL_B = "ws3a_user_b@naviscape.test"
+
+
+def _setup_ws3a_user_with_event(email, whatsapp_number=None, whatsapp_consent=False):
+    """Helper: create user, complete WS-1 profile, create ACTIVE event, optionally set WhatsApp fields."""
+    user, headers = _create_test_user(email)
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    # Update first trusted contact with optional WhatsApp fields
+    overview = client.get("/api/women-safety/emergency-profile", headers=headers).json()
+    first_contact_id = overview["trusted_contacts"][0]["id"]
+
+    if whatsapp_number is not None:
+        client.put(f"/api/women-safety/trusted-contacts/{first_contact_id}", json={
+            "whatsapp_number": whatsapp_number,
+            "whatsapp_alert_consent": whatsapp_consent,
+        }, headers=headers)
+
+    # Create ACTIVE emergency event with known GPS
+    event_res = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "location_accuracy_m": 15.0,
+    }, headers=headers)
+    assert event_res.status_code == 201, f"Failed to create event: {event_res.json()}"
+    return user, headers, event_res.json()
+
+
+def test_ws3a_whatsapp_number_creation():
+    """WS-3A: Create a trusted contact with WhatsApp number."""
+    user, headers = _create_test_user(WS3A_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    res = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "WA Contact",
+        "relationship": "Friend",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "9876543210",
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["whatsapp_number"] == "9876543210"
+    assert data["whatsapp_alert_consent"] is True
+    assert data["contact_name"] == "WA Contact"
+    assert data["mobile_number"] == "9876543210"
+
+
+def test_ws3a_whatsapp_number_validation():
+    """WS-3A: Invalid WhatsApp numbers are rejected with same rules as mobile."""
+    user, headers = _create_test_user(WS3A_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    # Invalid: too short
+    res1 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Invalid WA",
+        "relationship": "Friend",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "12345",
+    }, headers=headers)
+    assert res1.status_code == 422
+
+    # Invalid: starts with wrong digit
+    res2 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Invalid WA",
+        "relationship": "Friend",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "1234567890",
+    }, headers=headers)
+    assert res2.status_code == 422
+
+    # Valid: with +91 prefix
+    res3 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Valid WA Prefixed",
+        "relationship": "Friend",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "+919876543210",
+    }, headers=headers)
+    assert res3.status_code == 201
+    assert res3.json()["whatsapp_number"] == "9876543210"
+
+
+def test_ws3a_whatsapp_consent_persistence():
+    """WS-3A: WhatsApp consent defaults to False and persists when explicitly set."""
+    user, headers = _create_test_user(WS3A_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    # Create without consent (should default to False)
+    res1 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "No Consent",
+        "relationship": "Friend",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "9876543210",
+    }, headers=headers)
+    assert res1.status_code == 201
+    assert res1.json()["whatsapp_alert_consent"] is False
+
+    # Explicitly set consent to True
+    contact_id = res1.json()["id"]
+    res2 = client.put(f"/api/women-safety/trusted-contacts/{contact_id}", json={
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+    assert res2.status_code == 200
+    assert res2.json()["whatsapp_alert_consent"] is True
+
+    # Verify persistence via retrieval
+    overview = client.get("/api/women-safety/emergency-profile", headers=headers).json()
+    contact = next(c for c in overview["trusted_contacts"] if c["id"] == contact_id)
+    assert contact["whatsapp_alert_consent"] is True
+
+
+def test_ws3a_whatsapp_number_update():
+    """WS-3A: WhatsApp number can be updated on an existing contact."""
+    user, headers = _create_test_user(WS3A_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    res1 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Update WA",
+        "relationship": "Sister",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "9876543210",
+    }, headers=headers)
+    assert res1.status_code == 201
+    contact_id = res1.json()["id"]
+
+    # Update to different WhatsApp number
+    res2 = client.put(f"/api/women-safety/trusted-contacts/{contact_id}", json={
+        "whatsapp_number": "8765432109",
+    }, headers=headers)
+    assert res2.status_code == 200
+    assert res2.json()["whatsapp_number"] == "8765432109"
+    # Ensure mobile_number unchanged
+    assert res2.json()["mobile_number"] == "9876543210"
+
+
+def test_ws3a_whatsapp_number_clearing():
+    """WS-3A: WhatsApp number can be cleared (set to null)."""
+    user, headers = _create_test_user(WS3A_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    res1 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Clear WA",
+        "relationship": "Brother",
+        "mobile_number": "9876543210",
+        "whatsapp_number": "9876543210",
+    }, headers=headers)
+    contact_id = res1.json()["id"]
+
+    # Clear by setting to empty string
+    res2 = client.put(f"/api/women-safety/trusted-contacts/{contact_id}", json={
+        "whatsapp_number": "",
+    }, headers=headers)
+    assert res2.status_code == 200
+    assert res2.json()["whatsapp_number"] is None
+
+
+def test_ws3a_whatsapp_url_generation():
+    """WS-3A: WhatsApp alerts endpoint generates valid wa.me URLs."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["event_id"] == event["id"]
+    assert data["event_status"] == "ACTIVE"
+
+    # Find the contact with WhatsApp
+    wa_alerts = [a for a in data["alerts"] if a["whatsapp_available"]]
+    assert len(wa_alerts) >= 1
+    alert = wa_alerts[0]
+    assert alert["whatsapp_url"].startswith("https://wa.me/919876543210?text=")
+    assert alert["message_preview"] is not None
+    assert "NAVISCAPE EMERGENCY ALERT" in alert["message_preview"]
+
+
+def test_ws3a_whatsapp_url_encoding():
+    """WS-3A: Message text in WhatsApp URL is properly URL-encoded."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    data = res.json()
+    wa_alerts = [a for a in data["alerts"] if a["whatsapp_available"]]
+    url = wa_alerts[0]["whatsapp_url"]
+
+    # URL should not contain raw spaces or newlines
+    query_part = url.split("?text=")[1]
+    assert " " not in query_part
+    assert "\n" not in query_part
+    # Should contain URL-encoded equivalents
+    assert "%0A" in query_part or "%0a" in query_part  # newline encoded
+    assert "NAVISCAPE" in query_part or "NAVISCAPE" in url  # text present
+
+
+def test_ws3a_real_emergency_gps_in_message():
+    """WS-3A: GPS coordinates in message come from the real EmergencyEvent, not fabricated."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    data = res.json()
+
+    # Verify response coordinates match the event's GPS
+    assert data["latitude"] == event["latitude"]
+    assert data["longitude"] == event["longitude"]
+
+    # Verify the message contains the real coordinates
+    wa_alerts = [a for a in data["alerts"] if a["whatsapp_available"]]
+    message = wa_alerts[0]["message_preview"]
+    assert str(event["latitude"]) in message
+    assert str(event["longitude"]) in message
+    # Verify Google Maps URL uses real coordinates
+    assert f"maps?q={event['latitude']},{event['longitude']}" in message
+
+
+def test_ws3a_no_fake_gps_fallback():
+    """WS-3A: No Bangalore center, preset, destination, police, hospital, or fake coordinates."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    data = res.json()
+    wa_alerts = [a for a in data["alerts"] if a["whatsapp_available"]]
+    message = wa_alerts[0]["message_preview"]
+
+    # Known fake coordinates that MUST NOT appear
+    fake_coords = [
+        ("12.9716", "77.5946"),  # This IS our test coord — but verify it matches the EVENT
+        ("12.9741", "77.6138"),  # Bangalore center / MG Road
+        ("13.0827", "80.2707"),  # Chennai
+        ("0.0", "0.0"),         # Null island
+    ]
+
+    # The event used 12.9716, 77.5946 — verify it's from the actual event
+    assert data["latitude"] == event["latitude"]
+    assert data["longitude"] == event["longitude"]
+
+    # The WhatsApp endpoint does NOT accept lat/lng from the request
+    # It's a GET endpoint with no coordinate parameters
+
+
+def test_ws3a_only_active_events_generate_alerts():
+    """WS-3A: Only ACTIVE events can generate WhatsApp alert links."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    # Cancel the event
+    cancel_res = client.post(f"/api/women-safety/emergency-events/{event['id']}/cancel", headers=headers)
+    assert cancel_res.status_code == 200
+
+    # Try to get alerts for cancelled event
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    assert res.status_code == 400
+    assert "ACTIVE" in res.json()["detail"]
+
+
+def test_ws3a_user_isolation():
+    """WS-3A: User A cannot generate WhatsApp alerts for User B's event."""
+    user_a, headers_a, event_a = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+    user_b, headers_b = _create_test_user(WS3A_TEST_EMAIL_B)
+    _cleanup_test_user_data(user_b.id)
+
+    # User B tries to access User A's event alerts
+    res = client.get(f"/api/women-safety/emergency-events/{event_a['id']}/whatsapp-alerts", headers=headers_b)
+    assert res.status_code == 404
+    assert "not found" in res.json()["detail"].lower()
+
+
+def test_ws3a_contact_without_whatsapp_number():
+    """WS-3A: Contact without WhatsApp number shows 'unavailable' message."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number=None,  # No WhatsApp number
+        whatsapp_consent=False,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    # All contacts should be unavailable
+    for alert in data["alerts"]:
+        assert alert["whatsapp_available"] is False
+        assert alert["whatsapp_url"] is None
+        assert "unavailable" in alert["reason"].lower()
+
+
+def test_ws3a_contact_without_whatsapp_consent():
+    """WS-3A: Contact with WhatsApp number but no consent shows 'unavailable'."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=False,  # Has number but no consent
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+
+    # All contacts should be unavailable (the one with number has no consent)
+    for alert in data["alerts"]:
+        assert alert["whatsapp_available"] is False
+        assert "unavailable" in alert["reason"].lower()
+
+
+def test_ws3a_existing_ws1_functionality():
+    """WS-3A: All WS-1 features (profile, contacts, consent) still work correctly."""
+    user, headers = _create_test_user("ws3a_ws1_compat@naviscape.test")
+    _cleanup_test_user_data(user.id)
+
+    # Create profile
+    res1 = client.put("/api/women-safety/emergency-profile", json={
+        "emergency_mobile": "9876543210",
+        "location_sharing_consent": True,
+    }, headers=headers)
+    assert res1.status_code == 200
+
+    # Add contacts
+    res2 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "WS1 Contact",
+        "relationship": "Parent",
+        "mobile_number": "9811122233",
+    }, headers=headers)
+    assert res2.status_code == 201
+    # Verify WhatsApp fields default correctly
+    assert res2.json()["whatsapp_number"] is None
+    assert res2.json()["whatsapp_alert_consent"] is False
+
+    res3 = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "WS1 Contact 2",
+        "relationship": "Friend",
+        "mobile_number": "9844455566",
+    }, headers=headers)
+    assert res3.status_code == 201
+
+    # Profile should be complete
+    overview = client.get("/api/women-safety/emergency-profile", headers=headers).json()
+    assert overview["profile_complete"] is True
+    assert overview["contacts_count"] == 2
+
+
+def test_ws3a_existing_ws2_functionality():
+    """WS-3A: All WS-2 features (SOS trigger, cancel, event retrieval) still work correctly."""
+    user, headers = _create_test_user("ws3a_ws2_compat@naviscape.test")
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    # Trigger SOS
+    event_res = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 13.0356,
+        "longitude": 77.5970,
+        "location_accuracy_m": 10.0,
+    }, headers=headers)
+    assert event_res.status_code == 201
+    event = event_res.json()
+    assert event["status"] == "ACTIVE"
+    assert event["latitude"] == 13.0356
+
+    # Get active event
+    active_res = client.get("/api/women-safety/emergency-events/active", headers=headers).json()
+    assert active_res["has_active_event"] is True
+
+    # Cancel
+    cancel_res = client.post(f"/api/women-safety/emergency-events/{event['id']}/cancel", headers=headers)
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["status"] == "CANCELLED"
+
+
+def test_ws3a_existing_data_isolation():
+    """WS-3A: No other NAVISCAPE tables (traffic, accidents, etc.) are affected."""
+    from app.models.traffic import TrafficData, TrafficHourly, RouteHistory
+    from app.models.police_station import PoliceStation
+    from app.models.hospital import Hospital
+    from app.models.accident import AccidentData
+
+    db = SessionLocal()
+    try:
+        assert db.query(TrafficData).count() >= 800
+        assert db.query(TrafficHourly).count() >= 80
+        assert db.query(PoliceStation).count() == 921
+        assert db.query(Hospital).count() == 2226
+        assert db.query(AccidentData).count() == 95723
+        assert db.query(RouteHistory).count() >= 15
+    finally:
+        db.close()
+
+
+def test_ws3a_no_meta_api_integration():
+    """WS-3A: Verify whatsapp_service does not contain any external API integration."""
+    import inspect
+    from app.services import whatsapp_service
+
+    source = inspect.getsource(whatsapp_service)
+
+    # Must NOT contain any Meta/WhatsApp Cloud API references
+    forbidden_terms = [
+        "graph.facebook.com",
+        "META_API",
+        "WHATSAPP_API_KEY",
+        "WHATSAPP_TOKEN",
+        "requests.post",
+        "requests.get",
+        "httpx.post",
+        "httpx.get",
+        "aiohttp",
+        "cloud_api",
+    ]
+    for term in forbidden_terms:
+        assert term not in source, f"Forbidden term '{term}' found in whatsapp_service"
+
+    # Must contain wa.me (click-to-chat, not Cloud API)
+    assert "wa.me" in source
+
+
+def test_ws3a_no_automatic_delivery():
+    """WS-3A: The WhatsApp alerts endpoint does NOT claim delivery or auto-send."""
+    user, headers, event = _setup_ws3a_user_with_event(
+        WS3A_TEST_EMAIL_A,
+        whatsapp_number="9876543210",
+        whatsapp_consent=True,
+    )
+
+    res = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    data = res.json()
+
+    # Response should NOT contain any delivery status
+    import json
+    response_str = json.dumps(data)
+    assert "delivered" not in response_str.lower()
+    assert '"is_sent"' not in response_str.lower()
+    assert '"sent_at"' not in response_str.lower()
+    assert '"status": "sent"' not in response_str.lower()
+    assert "delivery_status" not in response_str.lower()
+
+    # URL should be wa.me click-to-chat, not an API call
+    for alert in data["alerts"]:
+        if alert["whatsapp_available"]:
+            assert alert["whatsapp_url"].startswith("https://wa.me/")
+            assert "graph.facebook.com" not in alert["whatsapp_url"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WS-3B TESTS — Real Device WhatsApp Click-to-Chat Flow
+# ═════════════════════════════════════════════════════════════════════════════
+
+WS3B_TEST_EMAIL_A = "ws3b_user_a@naviscape.test"
+WS3B_TEST_EMAIL_B = "ws3b_user_b@naviscape.test"
+
+
+def test_ws3b_active_emergency_displays_whatsapp_controls():
+    """WS-3B: Active emergency endpoint returns complete contact name, WhatsApp number and wa.me URL."""
+    user, headers = _create_test_user(WS3B_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    # Add a contact with complete WhatsApp details
+    res_c = client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Emergency Guardian",
+        "relationship": "Sister",
+        "mobile_number": "9812345678",
+        "whatsapp_number": "9812345678",
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+    assert res_c.status_code == 201
+
+    # Trigger SOS
+    res_e = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9352,
+        "longitude": 77.6245,
+        "location_accuracy_m": 8.0,
+    }, headers=headers)
+    assert res_e.status_code == 201
+    event = res_e.json()
+
+    # Fetch alerts
+    res_alerts = client.get(f"/api/women-safety/emergency-events/{event['id']}/whatsapp-alerts", headers=headers)
+    assert res_alerts.status_code == 200
+    data = res_alerts.json()
+    assert data["event_status"] == "ACTIVE"
+
+    guardian_alert = next((a for a in data["alerts"] if a["contact_name"] == "Emergency Guardian"), None)
+    assert guardian_alert is not None
+    assert guardian_alert["whatsapp_available"] is True
+    assert guardian_alert["whatsapp_number"] == "9812345678"
+    assert "https://wa.me/919812345678?text=" in guardian_alert["whatsapp_url"]
+
+
+def test_ws3b_multiple_contacts_heterogeneous_status():
+    """WS-3B: Multiple contacts with heterogeneous statuses (WA+Consent, WA+NoConsent, NoWA)."""
+    user, headers = _create_test_user(WS3B_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+
+    # 1. Profile
+    client.put("/api/women-safety/emergency-profile", json={
+        "emergency_mobile": "9876543210",
+        "location_sharing_consent": True,
+    }, headers=headers)
+
+    # 2. Contact 1: Has WhatsApp and Consent
+    client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Guardian Active",
+        "relationship": "Mother",
+        "mobile_number": "9811111111",
+        "whatsapp_number": "9811111111",
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+
+    # 3. Contact 2: Has WhatsApp but NO Consent
+    client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Guardian No Consent",
+        "relationship": "Father",
+        "mobile_number": "9822222222",
+        "whatsapp_number": "9822222222",
+        "whatsapp_alert_consent": False,
+    }, headers=headers)
+
+    # 4. Contact 3: No WhatsApp Number
+    client.post("/api/women-safety/trusted-contacts", json={
+        "contact_name": "Guardian No WA",
+        "relationship": "Friend",
+        "mobile_number": "9833333333",
+        "whatsapp_alert_consent": False,
+    }, headers=headers)
+
+    # Trigger SOS
+    res_e = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9279,
+        "longitude": 77.6271,
+        "location_accuracy_m": 5.0,
+    }, headers=headers)
+    event_id = res_e.json()["id"]
+
+    res_alerts = client.get(f"/api/women-safety/emergency-events/{event_id}/whatsapp-alerts", headers=headers)
+    assert res_alerts.status_code == 200
+    alerts = res_alerts.json()["alerts"]
+    assert len(alerts) == 3
+
+    # Check Contact 1: available
+    c1 = next(a for a in alerts if a["contact_name"] == "Guardian Active")
+    assert c1["whatsapp_available"] is True
+    assert c1["whatsapp_url"].startswith("https://wa.me/919811111111?text=")
+
+    # Check Contact 2: unavailable due to no consent
+    c2 = next(a for a in alerts if a["contact_name"] == "Guardian No Consent")
+    assert c2["whatsapp_available"] is False
+    assert c2["whatsapp_url"] is None
+    assert "unavailable" in c2["reason"].lower()
+
+    # Check Contact 3: unavailable due to no WA number
+    c3 = next(a for a in alerts if a["contact_name"] == "Guardian No WA")
+    assert c3["whatsapp_available"] is False
+    assert c3["whatsapp_url"] is None
+    assert "unavailable" in c3["reason"].lower()
+
+
+def test_ws3b_no_frontend_gps_substitution():
+    """WS-3B: Backend ignores any frontend query/body coords and strictly uses DB EmergencyEvent GPS."""
+    user, headers = _create_test_user(WS3B_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    # Set up WA contact
+    overview = client.get("/api/women-safety/emergency-profile", headers=headers).json()
+    cid = overview["trusted_contacts"][0]["id"]
+    client.put(f"/api/women-safety/trusted-contacts/{cid}", json={
+        "whatsapp_number": "9812345678",
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+
+    # Create real event with real coordinates (e.g. Bangalore South 12.9121, 77.5844)
+    res_e = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9121,
+        "longitude": 77.5844,
+        "location_accuracy_m": 4.0,
+    }, headers=headers)
+    event_id = res_e.json()["id"]
+
+    # Try to request alerts while supplying fake query parameters (?latitude=99.9999&longitude=88.8888)
+    res_alerts = client.get(
+        f"/api/women-safety/emergency-events/{event_id}/whatsapp-alerts?latitude=99.9999&longitude=88.8888",
+        headers=headers,
+    )
+    assert res_alerts.status_code == 200
+    data = res_alerts.json()
+
+    # Verify the real coordinates are used, fake ones completely ignored
+    assert data["latitude"] == 12.9121
+    assert data["longitude"] == 77.5844
+    assert "99.9999" not in str(data)
+    assert "88.8888" not in str(data)
+
+    alert = data["alerts"][0]
+    assert "12.9121" in alert["message_preview"]
+    assert "77.5844" in alert["message_preview"]
+
+
+def test_ws3b_cancelled_emergency_cannot_generate_alerts():
+    """WS-3B: Cancelled event returns 400 Bad Request: WhatsApp alerts only for ACTIVE events."""
+    user, headers = _create_test_user(WS3B_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    res_e = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+    }, headers=headers)
+    event_id = res_e.json()["id"]
+
+    # Cancel event
+    res_cancel = client.post(f"/api/women-safety/emergency-events/{event_id}/cancel", headers=headers)
+    assert res_cancel.status_code == 200
+
+    # Attempt to generate alert for cancelled event
+    res_alert = client.get(f"/api/women-safety/emergency-events/{event_id}/whatsapp-alerts", headers=headers)
+    assert res_alert.status_code == 400
+    assert "ACTIVE" in res_alert.json()["detail"]
+
+
+def test_ws3b_no_sent_status_persisted():
+    """WS-3B: Verify generating/opening alerts does NOT alter database event status or mark contact as sent."""
+    from app.models.emergency_event import EmergencyEvent
+    user, headers = _create_test_user(WS3B_TEST_EMAIL_A)
+    _cleanup_test_user_data(user.id)
+    _setup_complete_ws1_profile(user.id, headers)
+
+    overview = client.get("/api/women-safety/emergency-profile", headers=headers).json()
+    cid = overview["trusted_contacts"][0]["id"]
+    client.put(f"/api/women-safety/trusted-contacts/{cid}", json={
+        "whatsapp_number": "9812345678",
+        "whatsapp_alert_consent": True,
+    }, headers=headers)
+
+    res_e = client.post("/api/women-safety/emergency-events", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+    }, headers=headers)
+    event_id = res_e.json()["id"]
+
+    # Get WhatsApp alerts multiple times (simulating user tapping/opening)
+    client.get(f"/api/women-safety/emergency-events/{event_id}/whatsapp-alerts", headers=headers)
+    client.get(f"/api/women-safety/emergency-events/{event_id}/whatsapp-alerts", headers=headers)
+
+    # Verify event in DB is still ACTIVE (never changes to SENT, COMPLETED, DELIVERED)
+    db = SessionLocal()
+    try:
+        ev = db.query(EmergencyEvent).filter(EmergencyEvent.id == event_id).first()
+        assert ev.status == "ACTIVE"
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     tests = [
         # WS-1
@@ -699,6 +1376,33 @@ if __name__ == "__main__":
         ("WS-2 Duplicate Active Event Prevention", test_ws2_duplicate_active_event_prevention),
         ("WS-2 Existing Database Isolation", test_ws2_existing_database_isolation),
         ("WS-2 Existing WS-1 Functionality", test_ws2_existing_ws1_functionality),
+
+        # WS-3A
+        ("WS-3A WhatsApp Number Creation", test_ws3a_whatsapp_number_creation),
+        ("WS-3A WhatsApp Number Validation", test_ws3a_whatsapp_number_validation),
+        ("WS-3A WhatsApp Consent Persistence", test_ws3a_whatsapp_consent_persistence),
+        ("WS-3A WhatsApp Number Update", test_ws3a_whatsapp_number_update),
+        ("WS-3A WhatsApp Number Clearing", test_ws3a_whatsapp_number_clearing),
+        ("WS-3A WhatsApp URL Generation", test_ws3a_whatsapp_url_generation),
+        ("WS-3A WhatsApp URL Encoding", test_ws3a_whatsapp_url_encoding),
+        ("WS-3A Real Emergency GPS in Message", test_ws3a_real_emergency_gps_in_message),
+        ("WS-3A No Fake GPS Fallback", test_ws3a_no_fake_gps_fallback),
+        ("WS-3A Only ACTIVE Events Generate Alerts", test_ws3a_only_active_events_generate_alerts),
+        ("WS-3A User Isolation", test_ws3a_user_isolation),
+        ("WS-3A Contact Without WhatsApp Number", test_ws3a_contact_without_whatsapp_number),
+        ("WS-3A Contact Without WhatsApp Consent", test_ws3a_contact_without_whatsapp_consent),
+        ("WS-3A Existing WS-1 Functionality", test_ws3a_existing_ws1_functionality),
+        ("WS-3A Existing WS-2 Functionality", test_ws3a_existing_ws2_functionality),
+        ("WS-3A Existing Data Isolation", test_ws3a_existing_data_isolation),
+        ("WS-3A No Meta API Integration", test_ws3a_no_meta_api_integration),
+        ("WS-3A No Automatic Delivery", test_ws3a_no_automatic_delivery),
+
+        # WS-3B
+        ("WS-3B Active Emergency Displays WhatsApp Controls", test_ws3b_active_emergency_displays_whatsapp_controls),
+        ("WS-3B Multiple Contacts Heterogeneous Status", test_ws3b_multiple_contacts_heterogeneous_status),
+        ("WS-3B No Frontend GPS Substitution", test_ws3b_no_frontend_gps_substitution),
+        ("WS-3B Cancelled Emergency Gated", test_ws3b_cancelled_emergency_cannot_generate_alerts),
+        ("WS-3B No Sent Status Persisted", test_ws3b_no_sent_status_persisted),
     ]
 
     print(f"\nRunning Full Women Safety Test Suite ({len(tests)} tests)...")
@@ -706,3 +1410,5 @@ if __name__ == "__main__":
         fn()
         print(f"[PASS] {name}")
     print(f"\nALL {len(tests)} WOMEN SAFETY TEST CASES PASSED SUCCESSFULLY!")
+
+

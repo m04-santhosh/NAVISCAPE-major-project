@@ -189,6 +189,34 @@ def _migrate_traffic_hourly_table():
         print(f"[MIGRATE] traffic_hourly migration warning: {exc}")
 
 
+def _migrate_trusted_contacts_whatsapp():
+    """
+    WS-3A: Additive migration for trusted_contacts table.
+    Adds whatsapp_number (nullable TEXT) and whatsapp_alert_consent (BOOLEAN DEFAULT 0)
+    columns if they do not already exist. Idempotent — safe to run on every startup.
+    Existing rows get NULL for whatsapp_number and 0 (False) for whatsapp_alert_consent.
+    """
+    new_columns = {
+        "whatsapp_number": "VARCHAR(20)",
+        "whatsapp_alert_consent": "BOOLEAN NOT NULL DEFAULT 0",
+    }
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("PRAGMA table_info(trusted_contacts)")).fetchall()
+            if not rows:
+                return
+            existing_cols = {row[1] for row in rows}
+
+            for col_name, col_def in new_columns.items():
+                if col_name not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE trusted_contacts ADD COLUMN {col_name} {col_def}"))
+                    print(f"[MIGRATE] trusted_contacts: added column '{col_name}'")
+
+            conn.commit()
+    except Exception as exc:
+        print(f"[MIGRATE] trusted_contacts WhatsApp migration warning: {exc}")
+
+
 def init_db():
     """Create all tables and run additive migrations. Called on application startup."""
     # Register all models so Base.metadata knows about them
@@ -204,6 +232,7 @@ def init_db():
     _migrate_users_table()
     _migrate_traffic_table()
     _migrate_traffic_unique_index()
+    _migrate_trusted_contacts_whatsapp()
 
     # create_all is safe — it only creates tables/columns that don't exist
     Base.metadata.create_all(bind=engine)

@@ -75,6 +75,17 @@ export const womenSafetyService = {
     const res = await api.post(`/women-safety/emergency-events/${eventId}/cancel`);
     return res.data;
   },
+
+  /**
+   * WS-3A: Get WhatsApp alert URLs for an active emergency event
+   * Returns per-contact WhatsApp click-to-chat URLs generated from real EmergencyEvent GPS.
+   * Does NOT send any messages — user must manually press Send in WhatsApp.
+   * @param {number} eventId
+   */
+  async getWhatsAppAlerts(eventId) {
+    const res = await api.get(`/women-safety/emergency-events/${eventId}/whatsapp-alerts`);
+    return res.data;
+  },
 };
 
 export default womenSafetyService;

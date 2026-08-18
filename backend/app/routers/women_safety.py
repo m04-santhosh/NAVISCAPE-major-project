@@ -165,6 +165,8 @@ async def add_trusted_contact(
         relationship=payload.relationship,
         mobile_number=payload.mobile_number,
         email=payload.email,
+        whatsapp_number=payload.whatsapp_number,
+        whatsapp_alert_consent=payload.whatsapp_alert_consent,
     )
     db.add(contact)
     db.commit()
@@ -211,6 +213,11 @@ async def update_trusted_contact(
         contact.mobile_number = payload.mobile_number
     if payload.email is not None:
         contact.email = payload.email
+    if "whatsapp_number" in payload.model_fields_set:
+        # Allow clearing by setting to empty string (normalized to None by schema validator)
+        contact.whatsapp_number = payload.whatsapp_number
+    if payload.whatsapp_alert_consent is not None:
+        contact.whatsapp_alert_consent = payload.whatsapp_alert_consent
 
     db.commit()
     db.refresh(contact)
@@ -390,3 +397,108 @@ async def cancel_emergency_event(
         db.refresh(event)
 
     return event
+
+
+# ── WS-3A: WhatsApp Emergency Alert URL Generator ────────────────────────────────
+
+@router.get(
+    "/emergency-events/{event_id}/whatsapp-alerts",
+    summary="WS-3A: Generate WhatsApp click-to-chat URLs for an active emergency event",
+)
+async def get_whatsapp_alerts(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generates WhatsApp click-to-chat URLs for each eligible trusted contact.
+
+    Security constraints:
+    - Event MUST belong to the authenticated user.
+    - Event MUST have status == ACTIVE.
+    - GPS coordinates come ONLY from the EmergencyEvent record (never from the request).
+    - Only contacts with whatsapp_number AND whatsapp_alert_consent == True are eligible.
+
+    This endpoint is READ-ONLY. It does NOT send any messages, does NOT call
+    the Meta WhatsApp Cloud API, and does NOT mark anything as sent.
+    """
+    from ..services.whatsapp_service import generate_emergency_message, generate_whatsapp_url
+
+    # 1. Verify event belongs to authenticated user
+    event = (
+        db.query(EmergencyEvent)
+        .filter(EmergencyEvent.id == event_id, EmergencyEvent.user_id == current_user.id)
+        .first()
+    )
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Emergency event not found.",
+        )
+
+    # 2. Verify event is ACTIVE
+    if event.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="WhatsApp alerts can only be generated for ACTIVE emergency events.",
+        )
+
+    # 3. Get trusted contacts belonging to the same authenticated user
+    contacts = (
+        db.query(TrustedContact)
+        .filter(TrustedContact.user_id == current_user.id)
+        .order_by(TrustedContact.created_at.asc())
+        .all()
+    )
+
+    # 4. Build user display name from email (before @)
+    user_name = current_user.email.split("@")[0] if current_user.email else "NAVISCAPE User"
+
+    # 5. Format triggered_at timestamp
+    triggered_at_str = (
+        event.triggered_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        if event.triggered_at
+        else "Unknown"
+    )
+
+    # 6. Generate per-contact alert data using ONLY EmergencyEvent GPS
+    alerts = []
+    for contact in contacts:
+        alert_entry = {
+            "contact_id": contact.id,
+            "contact_name": contact.contact_name,
+            "relationship": contact.relationship,
+            "whatsapp_number": contact.whatsapp_number,
+            "whatsapp_alert_consent": contact.whatsapp_alert_consent,
+        }
+
+        if contact.whatsapp_number and contact.whatsapp_alert_consent:
+            message = generate_emergency_message(
+                user_name=user_name,
+                latitude=event.latitude,
+                longitude=event.longitude,
+                triggered_at=triggered_at_str,
+            )
+            whatsapp_url = generate_whatsapp_url(
+                whatsapp_number=contact.whatsapp_number,
+                message=message,
+            )
+            alert_entry["whatsapp_available"] = True
+            alert_entry["whatsapp_url"] = whatsapp_url
+            alert_entry["message_preview"] = message
+        else:
+            alert_entry["whatsapp_available"] = False
+            alert_entry["whatsapp_url"] = None
+            alert_entry["message_preview"] = None
+            alert_entry["reason"] = "WhatsApp alert unavailable for this contact."
+
+        alerts.append(alert_entry)
+
+    return {
+        "event_id": event.id,
+        "event_status": event.status,
+        "latitude": event.latitude,
+        "longitude": event.longitude,
+        "triggered_at": triggered_at_str,
+        "alerts": alerts,
+    }

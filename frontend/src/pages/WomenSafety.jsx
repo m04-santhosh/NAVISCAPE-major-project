@@ -48,11 +48,18 @@ export default function WomenSafety() {
   const [relationship, setRelationship] = useState('');
   const [contactMobile, setContactMobile] = useState('');
   const [contactEmail, setContactEmail] = useState('');
+  const [contactWhatsApp, setContactWhatsApp] = useState('');
+  const [contactWhatsAppConsent, setContactWhatsAppConsent] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
 
   // Delete Confirmation State (WS-1)
   const [contactToDelete, setContactToDelete] = useState(null);
   const [deletingContact, setDeletingContact] = useState(false);
+
+  // WS-3B: WhatsApp Alert State & Flow Tracking
+  const [whatsappAlerts, setWhatsappAlerts] = useState(null);
+  const [loadingWhatsappAlerts, setLoadingWhatsappAlerts] = useState(false);
+  const [whatsappStatus, setWhatsappStatus] = useState({}); // { [contactId]: { status: 'opened' | 'error', message: string } }
 
   // Fetch overview data and active emergency session on load
   const fetchOverview = useCallback(async (showLoading = true) => {
@@ -74,8 +81,21 @@ export default function WomenSafety() {
 
       if (activeEventData.has_active_event && activeEventData.event) {
         setActiveEmergency(activeEventData.event);
+        // WS-3B: Auto-fetch WhatsApp alerts for active emergency
+        try {
+          setLoadingWhatsappAlerts(true);
+          const alertsData = await womenSafetyService.getWhatsAppAlerts(activeEventData.event.id);
+          setWhatsappAlerts(alertsData);
+        } catch (err) {
+          console.error('Failed to fetch WhatsApp alerts:', err);
+          setWhatsappAlerts(null);
+        } finally {
+          setLoadingWhatsappAlerts(false);
+        }
       } else {
         setActiveEmergency(null);
+        setWhatsappAlerts(null);
+        setWhatsappStatus({});
       }
     } catch (err) {
       console.error('Failed to fetch emergency profile overview:', err);
@@ -182,6 +202,16 @@ export default function WomenSafety() {
           });
 
           setActiveEmergency(event);
+          // WS-3B: Fetch WhatsApp alerts for newly created emergency
+          try {
+            setLoadingWhatsappAlerts(true);
+            const alertsData = await womenSafetyService.getWhatsAppAlerts(event.id);
+            setWhatsappAlerts(alertsData);
+          } catch {
+            setWhatsappAlerts(null);
+          } finally {
+            setLoadingWhatsappAlerts(false);
+          }
           toast.success('🚨 Emergency session activated!', { id: toastId, icon: '🔴', duration: 4000 });
         } catch (err) {
           const msg = err.response?.data?.detail || 'Failed to activate emergency mode.';
@@ -219,6 +249,8 @@ export default function WomenSafety() {
     try {
       await womenSafetyService.cancelEmergencyEvent(activeEmergency.id);
       setActiveEmergency(null);
+      setWhatsappAlerts(null);
+      setWhatsappStatus({});
       setIsCancelModalOpen(false);
       toast.success('Emergency session cancelled.', { id: toastId, icon: '🛡️' });
     } catch (err) {
@@ -226,6 +258,44 @@ export default function WomenSafety() {
       toast.error(msg, { id: toastId });
     } finally {
       setCancellingEmergency(false);
+    }
+  };
+
+  // ── WS-3B: Real Device WhatsApp Click-to-Chat Flow Handler ───────────────
+
+  const handleSendWhatsAppAlert = (alert) => {
+    if (!alert || !alert.whatsapp_url) return;
+
+    try {
+      // Open the pre-filled wa.me click-to-chat URL in a new window/tab
+      const newTab = window.open(alert.whatsapp_url, '_blank', 'noopener,noreferrer');
+
+      // Check if browser blocked popup or failed to open
+      if (!newTab || newTab.closed || typeof newTab.closed === 'undefined') {
+        setWhatsappStatus((prev) => ({
+          ...prev,
+          [alert.contact_id]: {
+            status: 'error',
+            message: 'Unable to open WhatsApp. Please open WhatsApp manually and send the emergency message.',
+          },
+        }));
+      } else {
+        setWhatsappStatus((prev) => ({
+          ...prev,
+          [alert.contact_id]: {
+            status: 'opened',
+            message: 'WhatsApp opened — press Send to deliver the alert.',
+          },
+        }));
+      }
+    } catch {
+      setWhatsappStatus((prev) => ({
+        ...prev,
+        [alert.contact_id]: {
+          status: 'error',
+          message: 'Unable to open WhatsApp. Please open WhatsApp manually and send the emergency message.',
+        },
+      }));
     }
   };
 
@@ -274,6 +344,8 @@ export default function WomenSafety() {
     setRelationship('');
     setContactMobile('');
     setContactEmail('');
+    setContactWhatsApp('');
+    setContactWhatsAppConsent(false);
     setIsModalOpen(true);
   };
 
@@ -283,6 +355,8 @@ export default function WomenSafety() {
     setRelationship(contact.relationship);
     setContactMobile(contact.mobile_number);
     setContactEmail(contact.email || '');
+    setContactWhatsApp(contact.whatsapp_number || '');
+    setContactWhatsAppConsent(Boolean(contact.whatsapp_alert_consent));
     setIsModalOpen(true);
   };
 
@@ -309,6 +383,13 @@ export default function WomenSafety() {
       return;
     }
 
+    // WS-3A: Validate WhatsApp number if provided
+    const cleanedWhatsApp = contactWhatsApp.trim().replace(/[\s-]/g, '');
+    if (cleanedWhatsApp && !/^(?:\+91|0)?[6-9]\d{9}$/.test(cleanedWhatsApp)) {
+      toast.error('Please enter a valid 10-digit Indian mobile number for WhatsApp.');
+      return;
+    }
+
     setSavingContact(true);
     try {
       const payload = {
@@ -316,6 +397,8 @@ export default function WomenSafety() {
         relationship: relationship.trim(),
         mobile_number: cleanedMobile,
         email: contactEmail.trim() || null,
+        whatsapp_number: cleanedWhatsApp || null,
+        whatsapp_alert_consent: contactWhatsAppConsent,
       };
 
       if (editingContactId) {
@@ -381,10 +464,10 @@ export default function WomenSafety() {
               <h1 className="text-2xl font-black tracking-tight text-surface-100 flex items-center gap-2">
                 WOMEN SAFETY
                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30">
-                  WS-2 SOS Engine
+                  WS-3B WhatsApp Flow
                 </span>
               </h1>
-              <p className="text-xs text-surface-400 font-medium">Emergency Protection Profile, Trusted Contacts & SOS</p>
+              <p className="text-xs text-surface-400 font-medium">Emergency Protection Profile, Trusted Contacts, SOS & WhatsApp Alert Flow</p>
             </div>
           </div>
         </div>
@@ -483,6 +566,90 @@ export default function WomenSafety() {
                   : 'Just now'}
               </p>
             </div>
+          </div>
+
+          {/* WS-3B: WhatsApp Alert Section */}
+          <div className="pt-4 border-t border-rose-500/30 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-base">📱</span>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">WhatsApp Alerts — Trusted Contacts</h3>
+              </div>
+              <span className="text-[10px] font-semibold text-rose-300 bg-rose-950/60 px-2 py-0.5 rounded border border-rose-500/30">
+                Manual-Send Flow
+              </span>
+            </div>
+
+            {loadingWhatsappAlerts ? (
+              <div className="flex items-center gap-2 text-xs text-surface-400 py-2">
+                <div className="w-4 h-4 border-2 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
+                <span>Loading WhatsApp alert links...</span>
+              </div>
+            ) : whatsappAlerts && whatsappAlerts.alerts && whatsappAlerts.alerts.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {whatsappAlerts.alerts.map((alert) => {
+                  const currentStatus = whatsappStatus[alert.contact_id];
+
+                  return (
+                    <div
+                      key={alert.contact_id}
+                      className="p-3.5 rounded-xl bg-surface-950/70 border border-rose-500/30 space-y-2.5 flex flex-col justify-between"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-bold text-surface-100">{alert.contact_name}</p>
+                          <span className="text-[10px] font-semibold text-pink-300 bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20">
+                            {alert.relationship}
+                          </span>
+                        </div>
+
+                        {alert.whatsapp_available && alert.whatsapp_number && (
+                          <p className="text-[11px] font-mono font-medium text-emerald-400 flex items-center gap-1">
+                            <span>WA:</span>
+                            <span>+91 {alert.whatsapp_number}</span>
+                          </p>
+                        )}
+                      </div>
+
+                      {alert.whatsapp_available ? (
+                        <div className="space-y-2 pt-1 border-t border-surface-800/60">
+                          <button
+                            type="button"
+                            onClick={() => handleSendWhatsAppAlert(alert)}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold transition-all shadow-lg shadow-emerald-950/50 cursor-pointer"
+                          >
+                            <span>📲</span>
+                            <span>Send WhatsApp Alert</span>
+                          </button>
+
+                          {currentStatus && currentStatus.status === 'opened' && (
+                            <div className="p-2 rounded-lg bg-amber-950/40 border border-amber-500/30 text-[10px] text-amber-300 font-semibold text-center leading-tight">
+                              {currentStatus.message}
+                            </div>
+                          )}
+
+                          {currentStatus && currentStatus.status === 'error' && (
+                            <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[10px] text-rose-300 font-semibold text-center leading-tight">
+                              {currentStatus.message}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="pt-1 border-t border-surface-800/60">
+                          <p className="text-[10px] text-surface-500 italic">
+                            {alert.reason || 'WhatsApp alert unavailable for this contact.'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-surface-500 italic py-1">
+                No trusted contacts configured for WhatsApp alerts. Add a WhatsApp number and enable consent in your contact settings.
+              </p>
+            )}
           </div>
         </div>
       ) : (
@@ -800,6 +967,18 @@ export default function WomenSafety() {
                           <span className="truncate">{contact.email}</span>
                         </div>
                       )}
+                      {/* WS-3A: WhatsApp indicator */}
+                      {contact.whatsapp_number ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px]">📱</span>
+                          <span className="font-mono text-surface-200">WA: +91 {contact.whatsapp_number}</span>
+                          {contact.whatsapp_alert_consent ? (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">ALERTS ON</span>
+                          ) : (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-surface-800 text-surface-500 border border-surface-700">ALERTS OFF</span>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -1083,6 +1262,47 @@ export default function WomenSafety() {
                   onChange={(e) => setContactEmail(e.target.value)}
                   className="input-field text-xs"
                 />
+              </div>
+
+              {/* WS-3A: WhatsApp Number */}
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-surface-300">
+                  WhatsApp Number <span className="text-surface-500">(Optional)</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-xs font-bold text-surface-500">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    placeholder="9876543210"
+                    value={contactWhatsApp}
+                    onChange={(e) => setContactWhatsApp(e.target.value)}
+                    className="input-field pl-12 text-xs"
+                    maxLength={14}
+                  />
+                </div>
+                <p className="text-[10px] text-surface-500">10-digit Indian WhatsApp number for emergency alerts</p>
+              </div>
+
+              {/* WS-3A: WhatsApp Alert Consent */}
+              <div className="p-3 rounded-xl bg-surface-900/60 border border-surface-700/60">
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={contactWhatsAppConsent}
+                    onChange={(e) => setContactWhatsAppConsent(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-emerald-500 bg-surface-800 border-surface-600 focus:ring-emerald-500 focus:ring-offset-surface-900 cursor-pointer"
+                  />
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-bold text-surface-100">
+                      Allow emergency alerts through WhatsApp
+                    </p>
+                    <p className="text-[10px] text-surface-500">
+                      When enabled, you can send a pre-filled emergency message to this contact via WhatsApp during an active SOS.
+                    </p>
+                  </div>
+                </label>
               </div>
 
               {/* Buttons */}

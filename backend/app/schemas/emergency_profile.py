@@ -79,6 +79,8 @@ class TrustedContactCreate(BaseModel):
     relationship: str
     mobile_number: str
     email: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    whatsapp_alert_consent: bool = False
 
     @field_validator("contact_name")
     @classmethod
@@ -112,12 +114,19 @@ class TrustedContactCreate(BaseModel):
     def check_email(cls, v):
         return validate_email_format(v)
 
+    @field_validator("whatsapp_number")
+    @classmethod
+    def check_whatsapp(cls, v):
+        return validate_indian_mobile(v)
+
 
 class TrustedContactUpdate(BaseModel):
     contact_name: Optional[str] = None
     relationship: Optional[str] = None
     mobile_number: Optional[str] = None
     email: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    whatsapp_alert_consent: Optional[bool] = None
 
     @field_validator("contact_name")
     @classmethod
@@ -155,6 +164,17 @@ class TrustedContactUpdate(BaseModel):
     def check_email(cls, v):
         return validate_email_format(v)
 
+    @field_validator("whatsapp_number")
+    @classmethod
+    def check_whatsapp(cls, v):
+        if v is None:
+            return None
+        # Allow empty string to clear the field
+        cleaned = str(v).strip()
+        if not cleaned:
+            return None
+        return validate_indian_mobile(v)
+
 
 class TrustedContactResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -165,6 +185,8 @@ class TrustedContactResponse(BaseModel):
     relationship: str
     mobile_number: str
     email: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    whatsapp_alert_consent: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

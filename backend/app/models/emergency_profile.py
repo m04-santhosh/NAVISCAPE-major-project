@@ -43,6 +43,8 @@ class TrustedContact(Base):
     relationship = Column(String(50), nullable=False)
     mobile_number = Column(String(20), nullable=False)
     email = Column(String(254), nullable=True)
+    whatsapp_number = Column(String(20), nullable=True, default=None)
+    whatsapp_alert_consent = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
