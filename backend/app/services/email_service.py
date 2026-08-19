@@ -154,12 +154,14 @@ def send_otp_email(to_email: str, otp: str, purpose: OTPPurpose) -> None:
     msg.attach(MIMEText(_build_otp_html(otp, purpose, expire_minutes), "html"))
 
     context = ssl.create_default_context()
+    smtp_user = settings.SMTP_USERNAME.strip()
+    smtp_pass = settings.SMTP_PASSWORD.replace(" ", "").strip()
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
             server.ehlo()
             server.starttls(context=context)
-            server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            server.sendmail(settings.SMTP_FROM_EMAIL, to_email, msg.as_string())
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(settings.SMTP_FROM_EMAIL.strip(), to_email.strip(), msg.as_string())
         # OTP value is NOT logged here — security requirement
         print(f"[EMAIL] OTP email sent to {to_email} (purpose={purpose.value})")
     except smtplib.SMTPAuthenticationError:

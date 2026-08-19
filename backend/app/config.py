@@ -6,6 +6,9 @@ Centralized settings management using environment variables.
 import os
 from dotenv import load_dotenv
 
+# Load .env from backend directory and workspace root
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_backend_dir, ".env"))
 load_dotenv()
 
 
@@ -57,8 +60,10 @@ class Settings:
             _parsed_cors
             + [
                 "http://localhost:5173",
+                "http://localhost:5174",
                 "http://localhost:3000",
                 "http://127.0.0.1:5173",
+                "http://127.0.0.1:5174",
                 "https://naviscape.vercel.app",
             ]
         )
