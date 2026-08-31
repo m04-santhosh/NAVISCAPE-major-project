@@ -8,21 +8,37 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from .config import settings
 
-# Create engine with SQLite-specific settings
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False},  # Required for SQLite + FastAPI
-    echo=settings.DEBUG,
-)
+# Normalize DATABASE_URL (Supabase/Heroku often uses postgres:// which SQLAlchemy 2.0 requires as postgresql://)
+db_url = settings.DATABASE_URL
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
+is_sqlite = db_url.startswith("sqlite")
 
-# Enable WAL mode for better concurrent read/write performance
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+# Create engine with dialect-specific settings
+if is_sqlite:
+    engine = create_engine(
+        db_url,
+        connect_args={"check_same_thread": False},  # Required for SQLite + FastAPI
+        echo=settings.DEBUG,
+    )
+
+    # Enable WAL mode for better concurrent read/write performance on SQLite
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+else:
+    # PostgreSQL (Supabase, Neon, etc.)
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        echo=settings.DEBUG,
+    )
 
 
 # Session factory
@@ -227,15 +243,17 @@ def init_db():
     from .models import emergency_profile  # noqa: F401
     from .models import emergency_event  # noqa: F401
 
-    # Run migrations BEFORE create_all so the table structure is correct
-    _migrate_accident_table()
-    _migrate_users_table()
-    _migrate_traffic_table()
-    _migrate_traffic_unique_index()
-    _migrate_trusted_contacts_whatsapp()
+    # Run SQLite-specific migrations only when using SQLite
+    if is_sqlite:
+        _migrate_accident_table()
+        _migrate_users_table()
+        _migrate_traffic_table()
+        _migrate_traffic_unique_index()
+        _migrate_trusted_contacts_whatsapp()
 
-    # create_all is safe — it only creates tables/columns that don't exist
+    # create_all creates all tables/columns if they don't exist
     Base.metadata.create_all(bind=engine)
 
-    # Ensure unique index on newly created traffic_hourly table
-    _migrate_traffic_hourly_table()
+    if is_sqlite:
+        # Ensure unique index on newly created traffic_hourly table
+        _migrate_traffic_hourly_table()
