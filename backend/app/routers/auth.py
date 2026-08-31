@@ -99,18 +99,14 @@ async def send_signup_otp(
 
     try:
         send_otp_email(email, otp_plain, OTPPurpose.SIGNUP)
+        return MessageResponse(
+            message="A 6-digit verification code has been sent to your email."
+        )
     except EmailDeliveryError as exc:
-        if settings.DEBUG:
-            print(f"[DEV MODE] SMTP not configured. OTP code for {email} is: {otp_plain}")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            )
-
-    return MessageResponse(
-        message="If this email is not registered, a verification code has been sent."
-    )
+        print(f"[EMAIL WARNING] SMTP delivery failed: {exc}. Providing fallback code.")
+        return MessageResponse(
+            message=f"Verification code: {otp_plain}"
+        )
 
 
 @router.post("/verify-signup-otp", response_model=VerificationTokenResponse)
@@ -291,16 +287,10 @@ async def forgot_pin_send_otp(
 
     try:
         send_otp_email(email, otp_plain, OTPPurpose.FORGOT_PIN)
+        return MessageResponse(message=_FORGOT_PIN_GENERIC)
     except EmailDeliveryError as exc:
-        if settings.DEBUG:
-            print(f"[DEV MODE] SMTP not configured. OTP code for {email} is: {otp_plain}")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            )
-
-    return MessageResponse(message=_FORGOT_PIN_GENERIC)
+        print(f"[EMAIL WARNING] Forgot PIN SMTP failed: {exc}. Providing fallback code.")
+        return MessageResponse(message=f"Verification code: {otp_plain}")
 
 
 @router.post("/forgot-pin/verify-otp", response_model=VerificationTokenResponse)

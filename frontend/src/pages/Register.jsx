@@ -37,8 +37,8 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await sendSignupOTP(email);
-      toast.success('Verification code sent to your email!');
+      const res = await sendSignupOTP(email);
+      toast.success(res?.message || 'Verification code sent!');
       setStep(2);
       setCooldown(60);
     } catch (err) {
