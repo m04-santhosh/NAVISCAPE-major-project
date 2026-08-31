@@ -8,22 +8,31 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from .config import settings
 
-# Normalize DATABASE_URL (Supabase/Heroku often uses postgres:// which SQLAlchemy 2.0 requires as postgresql://)
+# Normalize DATABASE_URL
 db_url = settings.DATABASE_URL
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
+elif db_url.startswith("libsql://"):
+    db_url = db_url.replace("libsql://", "sqlite+libsql://", 1)
 
-is_sqlite = db_url.startswith("sqlite")
+is_turso = "libsql" in db_url
+is_sqlite = db_url.startswith("sqlite") and not is_turso
 
 # Create engine with dialect-specific settings
-if is_sqlite:
+if is_turso:
+    engine = create_engine(
+        db_url,
+        connect_args={"check_same_thread": False},
+        echo=settings.DEBUG,
+    )
+elif is_sqlite:
     engine = create_engine(
         db_url,
         connect_args={"check_same_thread": False},  # Required for SQLite + FastAPI
         echo=settings.DEBUG,
     )
 
-    # Enable WAL mode for better concurrent read/write performance on SQLite
+    # Enable WAL mode for better concurrent read/write performance on local SQLite
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
