@@ -32,11 +32,16 @@ if is_sqlite:
         cursor.close()
 else:
     # PostgreSQL (Supabase, Neon, etc.)
+    connect_args = {}
+    if "sslmode" not in db_url:
+        connect_args["sslmode"] = "require"
+
     engine = create_engine(
         db_url,
+        connect_args=connect_args,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=5,
+        max_overflow=10,
         echo=settings.DEBUG,
     )
 
@@ -47,9 +52,19 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Base class for ORM models
 Base = declarative_base()
 
+_db_initialized = False
+
 
 def get_db():
     """FastAPI dependency that provides a database session per request."""
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+            _db_initialized = True
+        except Exception as exc:
+            print(f"[DB LAZY INIT WARNING]: {exc}")
+
     db = SessionLocal()
     try:
         yield db

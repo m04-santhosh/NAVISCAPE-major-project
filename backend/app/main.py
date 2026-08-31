@@ -36,18 +36,23 @@ async def lifespan(app: FastAPI):
     print(f"  Database: {settings.DATABASE_URL}")
     print(f"{'='*60}\n")
 
-    # Start periodic traffic data collection
-    from .services.traffic_collector import traffic_collector_loop
-    collector_task = asyncio.create_task(traffic_collector_loop())
+    # Start periodic traffic data collection only in persistent server environments (not serverless)
+    collector_task = None
+    if not os.getenv("VERCEL"):
+        try:
+            from .services.traffic_collector import traffic_collector_loop
+            collector_task = asyncio.create_task(traffic_collector_loop())
+        except Exception as e:
+            print("Traffic collector start warning:", e)
 
     yield
 
-    # Cancel periodic traffic data collection
-    collector_task.cancel()
-    try:
-        await collector_task
-    except asyncio.CancelledError:
-        pass
+    if collector_task:
+        collector_task.cancel()
+        try:
+            await collector_task
+        except asyncio.CancelledError:
+            pass
     print("\nNAVISCAPE Server shutting down...")
 
 
@@ -70,15 +75,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global unhandled exception handler to prevent stack traces and configuration leak
+# Global unhandled exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Mask unhandled exceptions to prevent information disclosure in production."""
+    """Mask unhandled exceptions to prevent information disclosure in production, log details."""
     logger.exception(f"Unhandled exception in request {request.method} {request.url.path}: {exc}")
+    import traceback
+    traceback.print_exc()
+    detail = str(exc) if settings.DEBUG else "An internal server error occurred. Please contact system support."
     return JSONResponse(
         status_code=500,
         content={
-            "detail": "An internal server error occurred. Please contact system support.",
+            "detail": detail,
             "status": "error"
         }
     )
