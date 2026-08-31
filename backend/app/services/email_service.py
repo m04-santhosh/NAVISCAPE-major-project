@@ -156,19 +156,54 @@ def send_otp_email(to_email: str, otp: str, purpose: OTPPurpose) -> None:
     context = ssl.create_default_context()
     smtp_user = settings.SMTP_USERNAME.strip()
     smtp_pass = settings.SMTP_PASSWORD.replace(" ", "").strip()
+    smtp_from = (settings.SMTP_FROM_EMAIL or smtp_user).strip()
+
+    # Try SMTP with STARTTLS (port 587) or direct SSL (port 465) with auto-fallback
+    errors = []
+    
+    # 1. Direct SSL (port 465) or requested port if 465
+    if settings.SMTP_PORT == 465:
+        try:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, 465, context=context, timeout=12) as server:
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_from, to_email.strip(), msg.as_string())
+            print(f"[EMAIL] OTP email sent to {to_email} via SSL (port 465)")
+            return
+        except smtplib.SMTPAuthenticationError:
+            raise EmailDeliveryError(
+                "Gmail SMTP authentication failed. Please verify your 16-character Gmail App Password."
+            )
+        except Exception as e:
+            errors.append(f"Port 465 SSL failed: {e}")
+
+    # 2. STARTTLS (port 587)
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+        with smtplib.SMTP(settings.SMTP_HOST, 587, timeout=12) as server:
             server.ehlo()
             server.starttls(context=context)
             server.login(smtp_user, smtp_pass)
-            server.sendmail(settings.SMTP_FROM_EMAIL.strip(), to_email.strip(), msg.as_string())
-        # OTP value is NOT logged here — security requirement
-        print(f"[EMAIL] OTP email sent to {to_email} (purpose={purpose.value})")
+            server.sendmail(smtp_from, to_email.strip(), msg.as_string())
+        print(f"[EMAIL] OTP email sent to {to_email} via STARTTLS (port 587)")
+        return
     except smtplib.SMTPAuthenticationError:
         raise EmailDeliveryError(
-            "SMTP authentication failed. Check SMTP_USERNAME and SMTP_PASSWORD in .env."
+            "Gmail SMTP authentication failed. Please verify your 16-character Gmail App Password."
         )
-    except smtplib.SMTPException as exc:
-        raise EmailDeliveryError(f"SMTP error: {exc}")
-    except OSError as exc:
-        raise EmailDeliveryError(f"Network error sending email: {exc}")
+    except Exception as e:
+        errors.append(f"Port 587 STARTTLS failed: {e}")
+
+    # 3. Fallback to SSL (port 465) if port 587 timed out or was blocked
+    try:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, 465, context=context, timeout=12) as server:
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_from, to_email.strip(), msg.as_string())
+        print(f"[EMAIL] OTP email sent to {to_email} via fallback SSL (port 465)")
+        return
+    except smtplib.SMTPAuthenticationError:
+        raise EmailDeliveryError(
+            "Gmail SMTP authentication failed. Please verify your 16-character Gmail App Password."
+        )
+    except Exception as e:
+        errors.append(f"Port 465 fallback failed: {e}")
+
+    raise EmailDeliveryError(f"Failed to send email. {' | '.join(errors)}")
