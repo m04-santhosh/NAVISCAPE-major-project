@@ -24,16 +24,23 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
-# ── PIN hashing ───────────────────────────────────────────────────────────────
+# ── Password Hashing (bcrypt via passlib) ─────────────────────────────────────
 
-def hash_pin(pin: str) -> str:
-    """Hash a plain-text PIN using bcrypt."""
-    return _pwd_context.hash(pin)
+def hash_password(password: str) -> str:
+    """Hash a plain-text password using bcrypt."""
+    return _pwd_context.hash(password)
 
 
-def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
-    """Verify a plain-text PIN against its bcrypt hash."""
-    return _pwd_context.verify(plain_pin, hashed_pin)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a plain-text password against its bcrypt hash."""
+    if not hashed_password:
+        return False
+    return _pwd_context.verify(plain_password, hashed_password)
+
+
+# Aliases for backward compatibility
+hash_pin = hash_password
+verify_pin = verify_password
 
 
 # ── JWT token management ──────────────────────────────────────────────────────

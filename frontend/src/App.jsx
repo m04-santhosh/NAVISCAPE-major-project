@@ -9,7 +9,7 @@ import Navigation from './pages/Navigation';
 import Analytics from './pages/Analytics';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import ForgotPin from './pages/ForgotPin';
+import ForgotPassword from './pages/ForgotPin';
 import WomenSafety from './pages/WomenSafety';
 
 /** Route guard: redirects unauthenticated users to /login */
@@ -101,7 +101,8 @@ export default function App() {
             {/* Public authentication screens */}
             <Route path="/login" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
             <Route path="/register" element={<PublicOnlyRoute><Register /></PublicOnlyRoute>} />
-            <Route path="/forgot-pin" element={<PublicOnlyRoute><ForgotPin /></PublicOnlyRoute>} />
+            <Route path="/forgot-pin" element={<PublicOnlyRoute><ForgotPassword /></PublicOnlyRoute>} />
+            <Route path="/change-password" element={<ForgotPassword />} />
 
             {/* Authenticated application routes with compact sidebar */}
             <Route element={<ProtectedRoute />}>

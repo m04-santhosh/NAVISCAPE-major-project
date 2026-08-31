@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
@@ -52,62 +51,28 @@ export function AuthProvider({ children }) {
     setUser(userData);
   }, []);
 
-  const login = useCallback(async (email, pin) => {
-    const res = await api.post('/auth/login', { email, pin });
+  const login = useCallback(async (email, password) => {
+    const res = await api.post('/auth/login', { email, password });
+    _setSession(res.data.access_token, res.data.user);
+    return res.data.user;
+  }, [_setSession]);
+
+  const register = useCallback(async (name, email, password, confirmPassword) => {
+    const res = await api.post('/auth/register', {
+      full_name: name,
+      email,
+      password,
+      confirm_password: confirmPassword,
+    });
     _setSession(res.data.access_token, res.data.user);
     return res.data.user;
   }, [_setSession]);
 
   const logout = useCallback(() => {
     localStorage.removeItem('naviscape-token');
+    delete api.defaults.headers.common['Authorization'];
     setToken(null);
     setUser(null);
-    // api interceptor handles the 401 redirect; direct logout goes to /login
-  }, []);
-
-  // ── OTP signup helpers (stateless — UI manages step state) ────────────────
-
-  const sendSignupOTP = useCallback(async (email) => {
-    const res = await api.post('/auth/send-signup-otp', { email });
-    return res.data;
-  }, []);
-
-  const verifySignupOTP = useCallback(async (email, otp) => {
-    const res = await api.post('/auth/verify-signup-otp', { email, otp });
-    return res.data; // { verification_token, message }
-  }, []);
-
-  const setPin = useCallback(async (email, verificationToken, pin, confirmPin) => {
-    const res = await api.post('/auth/set-pin', {
-      email,
-      verification_token: verificationToken,
-      pin,
-      confirm_pin: confirmPin,
-    });
-    _setSession(res.data.access_token, res.data.user);
-    return res.data.user;
-  }, [_setSession]);
-
-  // ── Forgot PIN helpers ────────────────────────────────────────────────────
-
-  const forgotPinSendOTP = useCallback(async (email) => {
-    const res = await api.post('/auth/forgot-pin/send-otp', { email });
-    return res.data;
-  }, []);
-
-  const forgotPinVerifyOTP = useCallback(async (email, otp) => {
-    const res = await api.post('/auth/forgot-pin/verify-otp', { email, otp });
-    return res.data; // { verification_token, message }
-  }, []);
-
-  const resetPin = useCallback(async (email, verificationToken, newPin, confirmPin) => {
-    const res = await api.post('/auth/forgot-pin/reset', {
-      email,
-      verification_token: verificationToken,
-      new_pin: newPin,
-      confirm_pin: confirmPin,
-    });
-    return res.data; // { message }
   }, []);
 
   const value = {
@@ -116,13 +81,8 @@ export function AuthProvider({ children }) {
     loading,
     isAuthenticated: !!user,
     login,
+    register,
     logout,
-    sendSignupOTP,
-    verifySignupOTP,
-    setPin,
-    forgotPinSendOTP,
-    forgotPinVerifyOTP,
-    resetPin,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

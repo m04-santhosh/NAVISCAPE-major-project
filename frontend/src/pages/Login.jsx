@@ -7,22 +7,22 @@ import toast from 'react-hot-toast';
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: '', pin: '' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.email || !form.pin) {
-      toast.error('Please enter both email and PIN');
+    if (!form.email || !form.password) {
+      toast.error('Please enter both email and password');
       return;
     }
     setLoading(true);
     try {
-      await login(form.email, form.pin);
+      await login(form.email, form.password);
       toast.success('Welcome back!');
       navigate('/navigate');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Invalid email or PIN');
+      toast.error(err.response?.data?.detail || 'Invalid email or password');
     } finally {
       setLoading(false);
     }
@@ -41,7 +41,7 @@ export default function Login() {
         <div className="glass-card p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="text-sm font-medium text-surface-300 mb-2 block">Gmail / Email</label>
+              <label className="text-sm font-medium text-surface-300 mb-2 block">Email</label>
               <div className="relative">
                 <HiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-400 w-5 h-5" />
                 <input
@@ -56,25 +56,18 @@ export default function Login() {
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-surface-300">Security PIN</label>
-                <Link to="/forgot-pin" className="text-xs text-primary-400 hover:text-primary-300 font-medium">
-                  Forgot PIN?
-                </Link>
-              </div>
+              <label className="text-sm font-medium text-surface-300 mb-2 block">Password</label>
               <div className="relative">
                 <HiLockClosed className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-400 w-5 h-5" />
                 <input
                   type="password"
-                  maxLength={6}
-                  className="input-field pl-12 tracking-widest text-lg font-mono"
-                  placeholder="••••••"
-                  value={form.pin}
-                  onChange={(e) => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
+                  className="input-field pl-12"
+                  placeholder="••••••••"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
                   required
                 />
               </div>
-              <p className="text-[11px] text-surface-500 mt-1">Enter your 4–6 digit security PIN</p>
             </div>
 
             <button
