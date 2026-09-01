@@ -10,7 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+import logging
 from ..database import get_db
+
+logger = logging.getLogger(__name__)
+
 from ..middleware.auth import get_current_user
 from ..models.user import User
 from ..models.emergency_profile import EmergencyProfile, TrustedContact
@@ -84,6 +88,15 @@ async def get_emergency_profile(
         .order_by(TrustedContact.created_at.asc())
         .all()
     )
+
+    # Sync with Firestore if available
+    try:
+        from ..repositories.firestore_repo import firestore_repo
+        if firestore_repo.db:
+            firestore_repo.get_emergency_profile(str(getattr(current_user, "uid", current_user.id)))
+    except Exception as e:
+        logger.warning(f"Firestore sync note: {e}")
+
     return _compute_overview(profile, contacts)
 
 
@@ -126,13 +139,45 @@ async def update_emergency_profile(
     db.commit()
     db.refresh(profile)
 
+    # Sync write to Firestore asynchronously
+    def _bg_sync_profile(uid_val, legacy_id, mobile, email, consent):
+        try:
+            from ..repositories.firestore_repo import firestore_repo
+            if firestore_repo.db:
+                firestore_repo.create_or_update_emergency_profile(
+                    str(uid_val),
+                    {
+                        "sqlite_legacy_id": legacy_id,
+                        "emergency_mobile": mobile,
+                        "emergency_email": email,
+                        "location_sharing_consent": consent,
+                    },
+                )
+        except Exception as e:
+            logger.warning(f"Firestore emergency profile sync note: {e}")
+
+    import threading
+    threading.Thread(
+        target=_bg_sync_profile,
+        args=(
+            getattr(current_user, "uid", current_user.id),
+            profile.id,
+            profile.emergency_mobile,
+            profile.emergency_email,
+            profile.location_sharing_consent,
+        ),
+        daemon=True,
+    ).start()
+
     contacts = (
+
         db.query(TrustedContact)
         .filter(TrustedContact.user_id == current_user.id)
         .order_by(TrustedContact.created_at.asc())
         .all()
     )
     return _compute_overview(profile, contacts)
+
 
 
 # ── Trusted Contacts Endpoints ────────────────────────────────────────────────

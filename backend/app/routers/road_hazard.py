@@ -54,7 +54,39 @@ async def create_hazard_report(
     db.add(new_hazard)
     db.commit()
     db.refresh(new_hazard)
+
+    # Sync write to Firestore asynchronously
+    def _bg_hazard_sync(uid_val, legacy_user_id, haz_obj):
+        try:
+            from ..repositories.firestore_repo import firestore_repo
+            if firestore_repo.db:
+                firestore_repo.create_road_hazard(
+                    str(uid_val),
+                    {
+                        "id": haz_obj.id,
+                        "sqlite_legacy_user_id": legacy_user_id,
+                        "hazard_type": haz_obj.hazard_type,
+                        "severity": haz_obj.severity,
+                        "latitude": haz_obj.latitude,
+                        "longitude": haz_obj.longitude,
+                        "description": haz_obj.description,
+                        "status": haz_obj.status,
+                    },
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Firestore hazard write note: {e}")
+
+    import threading
+    threading.Thread(
+        target=_bg_hazard_sync,
+        args=(getattr(current_user, "uid", current_user.id), current_user.id, new_hazard),
+        daemon=True,
+    ).start()
+
     return new_hazard
+
+
 
 
 @router.get("", response_model=List[HazardReportResponse])

@@ -13,7 +13,6 @@ Failure to import a model here causes:
 # Import order: base models first, then models that reference others via FK/relationship
 from .user import User           # defines relationship("RouteHistory")
 from .traffic import TrafficData, RouteHistory  # RouteHistory must be imported for User.route_history to resolve
-from .otp import OTPRecord
 from .accident import AccidentData
 from .road_hazard import RoadHazard
 from .police_station import PoliceStation
@@ -25,7 +24,6 @@ __all__ = [
     "User",
     "TrafficData",
     "RouteHistory",
-    "OTPRecord",
     "AccidentData",
     "RoadHazard",
     "PoliceStation",

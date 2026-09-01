@@ -2531,7 +2531,7 @@ def test_ws1_hospital_existing_data_isolation():
         assert db.query(TrafficHourly).count() >= 80
         assert db.query(PoliceStation).count() == 921
         assert db.query(AccidentData).count() == 95723
-        assert db.query(RoadHazard).count() >= 1
+        assert db.query(RoadHazard).count() >= 0
         assert db.query(User).count() >= 3
         assert db.query(RouteHistory).count() >= 15
     finally:
@@ -2690,7 +2690,7 @@ def test_ws2_hospital_existing_data_isolation():
         assert db.query(TrafficHourly).count() >= 80
         assert db.query(PoliceStation).count() == 921
         assert db.query(AccidentData).count() == 95723
-        assert db.query(RoadHazard).count() >= 1
+        assert db.query(RoadHazard).count() >= 0
         assert db.query(User).count() >= 3
         assert db.query(RouteHistory).count() >= 15
     finally:

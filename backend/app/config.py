@@ -4,6 +4,7 @@ Centralized settings management using environment variables.
 """
 
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 # Load .env from backend directory and workspace root
@@ -36,6 +37,11 @@ class Settings:
         "DATABASE_URL",
         f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(__file__)), 'naviscape.db')}"
     )
+
+    # Firebase & Firestore Configuration
+    FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "naviscape-default")
+    FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", None)
+    FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", None)
 
     # JWT Authentication — SECRET_KEY MUST come from environment
     SECRET_KEY: str = _require_env(

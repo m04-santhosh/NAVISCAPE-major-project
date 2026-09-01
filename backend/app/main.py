@@ -82,7 +82,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled exception in request {request.method} {request.url.path}: {exc}")
     import traceback
     traceback.print_exc()
-    detail = str(exc) if settings.DEBUG else "An internal server error occurred. Please contact system support."
+    detail = "An internal server error occurred. Please contact system support."
     return JSONResponse(
         status_code=500,
         content={
