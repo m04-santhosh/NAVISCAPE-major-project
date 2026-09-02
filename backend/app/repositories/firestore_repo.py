@@ -117,8 +117,6 @@ class FirestoreRepository:
             raise RuntimeError("Firestore DB client not available")
 
         doc_ref = self.db.collection("users").document(str(uid))
-        existing = doc_ref.get()
-
         now_iso = datetime.now(timezone.utc).isoformat()
         user_dict = {
             "email": (data.get("email") or "").strip().lower(),
@@ -128,13 +126,11 @@ class FirestoreRepository:
             "is_active": data.get("is_active", True),
             "is_admin": data.get("is_admin", False),
             "sqlite_legacy_id": data.get("sqlite_legacy_id"),
+            "created_at": data.get("created_at") or now_iso,
             "updated_at": now_iso,
         }
 
-        if not existing.exists:
-            user_dict["created_at"] = data.get("created_at") or now_iso
-
-        doc_ref.set(user_dict, merge=True)
+        doc_ref.set(user_dict, merge=True, timeout=5.0)
         user_dict["uid"] = str(uid)
         user_dict["id"] = user_dict.get("sqlite_legacy_id") or str(uid)
         return user_dict

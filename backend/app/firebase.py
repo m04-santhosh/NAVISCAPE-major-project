@@ -20,6 +20,28 @@ _firebase_app: Optional[firebase_admin.App] = None
 _firestore_db: Optional[firestore.firestore.Client] = None
 
 
+def _resolve_service_account_path(path: Optional[str]) -> Optional[str]:
+    """
+    Resolve service account file path supporting absolute paths,
+    paths relative to cwd, and paths relative to backend directory.
+    """
+    if not path:
+        return None
+    # 1. Direct path check (absolute or relative to current working directory)
+    if os.path.exists(path):
+        return os.path.abspath(path)
+    # 2. Relative to backend directory
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    backend_relative = os.path.join(backend_dir, path)
+    if os.path.exists(backend_relative):
+        return os.path.abspath(backend_relative)
+    # 3. Default serviceAccountKey.json in backend directory
+    default_key = os.path.join(backend_dir, "serviceAccountKey.json")
+    if os.path.exists(default_key):
+        return os.path.abspath(default_key)
+    return None
+
+
 def get_firebase_app() -> Optional[firebase_admin.App]:
     """
     Initialize or return the singleton Firebase Admin App instance.
@@ -38,7 +60,7 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
         _firebase_app = firebase_admin.get_app()
         return _firebase_app
 
-    service_account_path = settings.FIREBASE_SERVICE_ACCOUNT_PATH
+    service_account_path = _resolve_service_account_path(settings.FIREBASE_SERVICE_ACCOUNT_PATH)
     service_account_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON
     project_id = settings.FIREBASE_PROJECT_ID
 
