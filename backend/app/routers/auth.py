@@ -4,10 +4,12 @@ Password-based authentication with JWT token management.
 """
 
 from datetime import datetime, timezone
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import get_db
 from ..middleware.auth import (
     create_access_token,
@@ -17,12 +19,19 @@ from ..middleware.auth import (
 )
 from ..models.user import User
 from ..schemas.user import (
+    ForgotPasswordRequest,
     MessageResponse,
+    ResetPasswordRequest,
+    TestEmailRequest,
     TokenResponse,
     UserLogin,
     UserRegister,
     UserResponse,
+    VerifyOTPRequest,
 )
+from ..email_service import email_service, otp_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -37,6 +46,7 @@ def _normalize_email(email: str) -> str:
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     data: UserRegister,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -81,11 +91,167 @@ async def register(
     db.commit()
     db.refresh(new_user)
 
+    # Send welcome email asynchronously via BackgroundTasks (non-blocking)
+    if email_service.is_configured:
+        background_tasks.add_task(
+            email_service.send_welcome_email,
+            to_email=new_user.email,
+            user_name=new_user.full_name,
+        )
+
     token = create_access_token(data={"sub": str(new_user.id)})
     return TokenResponse(
         access_token=token,
         user=UserResponse.model_validate(new_user),
     )
+
+
+# ── Password Reset / OTP Flow ──────────────────────────────────────────────────
+
+@router.post("/forgot-password", response_model=MessageResponse)
+@router.post("/forgot-pin", response_model=MessageResponse)
+@router.post("/send-otp", response_model=MessageResponse)
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Generate and email a 6-digit OTP for password reset.
+    Accepts email address and securely sends code via Gmail SMTP.
+    """
+    email = _normalize_email(data.email)
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        # Prevent user enumeration in responses while still returning a friendly message
+        logger.info("Password reset requested for non-existent email: %s", email)
+        return MessageResponse(
+            message="If an account exists with this email, a verification code has been sent."
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated.",
+        )
+
+    # Generate 6-digit OTP and store with 10-minute validity
+    otp = otp_store.generate_otp(email=email, purpose="password_reset")
+
+    # Send OTP via Gmail SMTP in background
+    if email_service.is_configured:
+        background_tasks.add_task(
+            email_service.send_otp_email,
+            to_email=email,
+            otp_code=otp,
+            user_name=user.full_name,
+            purpose="Password Reset",
+            validity_minutes=10,
+        )
+    else:
+        logger.warning(
+            "SMTP is not configured. OTP generated for %s but could not be sent.",
+            email,
+        )
+
+    return MessageResponse(
+        message="A verification code has been sent to your email address."
+    )
+
+
+@router.post("/verify-otp", response_model=MessageResponse)
+async def verify_otp(data: VerifyOTPRequest):
+    """
+    Verify an OTP code without consuming it immediately.
+    """
+    email = _normalize_email(data.email)
+    is_valid, msg = otp_store.verify_otp(
+        email=email,
+        otp=data.otp,
+        purpose="password_reset",
+        consume=False,
+    )
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        )
+    return MessageResponse(message="OTP verified successfully.")
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+@router.post("/reset-pin", response_model=MessageResponse)
+async def reset_password(
+    data: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Reset user password using a verified OTP.
+    Validates OTP, consumes it, and updates password in the database.
+    """
+    email = _normalize_email(data.email)
+
+    if data.new_password != data.confirm_new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New passwords do not match.",
+        )
+
+    # Verify and consume OTP
+    is_valid, msg = otp_store.verify_otp(
+        email=email,
+        otp=data.otp,
+        purpose="password_reset",
+        consume=True,
+    )
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        )
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    new_hash = hash_password(data.new_password)
+    user.hashed_password = new_hash
+    user.pin_hash = new_hash
+    user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.commit()
+
+    return MessageResponse(message="Password reset successfully. Please log in with your new password.")
+
+
+# ── Test Email Endpoint ────────────────────────────────────────────────────────
+
+@router.post("/test-email", response_model=MessageResponse)
+async def test_email(
+    data: TestEmailRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Send a test email via Gmail SMTP.
+    Requires authentication in production, or accessible in DEBUG mode.
+    """
+    recipient = _normalize_email(data.recipient_email)
+    result = email_service.send_email(
+        to_email=recipient,
+        subject=data.subject or "NAVISCAPE Test Email",
+        body_text=data.message or "This is a test email sent from the NAVISCAPE backend via Gmail SMTP.",
+    )
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("message", "Failed to send test email."),
+        )
+
+    return MessageResponse(message=f"Test email sent successfully to {recipient}.")
 
 
 # ── Login ──────────────────────────────────────────────────────────────────────
@@ -196,3 +362,4 @@ async def get_profile(current_user: User = Depends(get_current_user)):
 async def logout():
     """Client-side token disposal endpoint."""
     return MessageResponse(message="Logged out successfully.")
+

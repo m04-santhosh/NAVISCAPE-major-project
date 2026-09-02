@@ -78,3 +78,71 @@ class MessageResponse(BaseModel):
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
+
+
+# ── Password Reset & OTP Schemas ─────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
+
+class VerifyOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v):
+        cleaned = str(v).strip()
+        if not cleaned:
+            raise ValueError("OTP is required.")
+        return cleaned
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp: str
+    new_password: str
+    confirm_new_password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v):
+        cleaned = str(v).strip()
+        if not cleaned:
+            raise ValueError("OTP is required.")
+        return cleaned
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("New password must be at least 6 characters long.")
+        return v
+
+
+class TestEmailRequest(BaseModel):
+    recipient_email: EmailStr
+    subject: Optional[str] = "NAVISCAPE Test Email"
+    message: Optional[str] = None
+
+    @field_validator("recipient_email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
