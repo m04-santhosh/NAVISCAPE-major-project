@@ -244,3 +244,238 @@ def test_api_dev_test_email_endpoint():
         assert res.status_code == 200
         assert res.json()["status"] == "success"
         mock_send.assert_called_once()
+
+
+# ── Registration Email OTP Flow Tests ────────────────────────────────────────
+
+def test_registration_otp_full_flow():
+    from app.database import SessionLocal
+    db = SessionLocal()
+    test_email = "new_registered_user@naviscape.com"
+    test_password = "SecurePassword123!"
+    test_name = "New Verified User"
+
+    try:
+        # Clean up any leftover test data
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        otp_store.clear(test_email, purpose="registration")
+
+        # 1. Step 1: Registration Request
+        with patch.object(email_service, "send_otp_email") as mock_send_otp:
+            mock_send_otp.return_value = {"success": True}
+
+            reg_res = client.post(
+                "/api/auth/register",
+                json={
+                    "full_name": test_name,
+                    "email": test_email,
+                    "password": test_password,
+                    "confirm_password": test_password,
+                },
+            )
+            assert reg_res.status_code == 200
+            data = reg_res.json()
+            assert data["status"] == "otp_required"
+            assert data["email"] == test_email
+            assert "otp" not in data  # Never expose OTP in response
+            assert test_password not in str(data)  # Never expose password
+
+            # 2. Check that user is NOT created in DB yet
+            pending_user = db.query(User).filter(User.email == test_email).first()
+            assert pending_user is None
+
+        # 3. Retrieve OTP from OTPStore (purpose: registration)
+        otp_key = f"{test_email}::registration"
+        assert otp_key in otp_store._store
+        correct_otp = otp_store._store[otp_key]["otp"]
+        assert len(correct_otp) == 6
+        assert correct_otp.isdigit()
+
+        # 4. Wrong OTP is rejected
+        wrong_otp_res = client.post(
+            "/api/auth/register/verify-otp",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+                "otp": "000000",
+            },
+        )
+        assert wrong_otp_res.status_code == 400
+        assert "invalid otp" in wrong_otp_res.json()["detail"].lower()
+
+        # Ensure user is STILL not in DB
+        assert db.query(User).filter(User.email == test_email).first() is None
+
+        # 5. Correct OTP creates the account
+        with patch.object(email_service, "send_welcome_email") as mock_welcome:
+            mock_welcome.return_value = {"success": True}
+
+            verify_res = client.post(
+                "/api/auth/register/verify-otp",
+                json={
+                    "full_name": test_name,
+                    "email": test_email,
+                    "password": test_password,
+                    "confirm_password": test_password,
+                    "otp": correct_otp,
+                },
+            )
+            assert verify_res.status_code == 201
+            verify_data = verify_res.json()
+            assert "access_token" in verify_data
+            assert verify_data["user"]["email"] == test_email
+            assert verify_data["user"]["full_name"] == test_name
+            assert verify_data["user"]["email_verified"] is True
+
+        # 6. Verify password in DB is hashed and NOT plain text
+        created_user = db.query(User).filter(User.email == test_email).first()
+        assert created_user is not None
+        assert created_user.hashed_password != test_password
+        assert created_user.hashed_password.startswith("$2b$") or created_user.hashed_password.startswith("$2a$")
+        assert created_user.email_verified is True
+
+        # 7. Verify login works with newly registered credentials
+        login_res = client.post(
+            "/api/auth/login",
+            json={"email": test_email, "password": test_password},
+        )
+        assert login_res.status_code == 200
+        assert "access_token" in login_res.json()
+
+        # 8. Attempting to register again with same email fails
+        duplicate_res = client.post(
+            "/api/auth/register",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+            },
+        )
+        assert duplicate_res.status_code == 400
+        assert "already exists" in duplicate_res.json()["detail"].lower()
+
+    finally:
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        db.close()
+
+
+def test_registration_otp_resend_and_expiry():
+    from app.database import SessionLocal
+    db = SessionLocal()
+    test_email = "resend_test_user@naviscape.com"
+    test_password = "SecurePassword456!"
+    test_name = "Resend Test User"
+
+    try:
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        otp_store.clear(test_email, purpose="registration")
+
+        # 1. Initial request
+        res1 = client.post(
+            "/api/auth/register",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+            },
+        )
+        assert res1.status_code == 200
+        otp1 = otp_store._store[f"{test_email}::registration"]["otp"]
+
+        # 2. Resend OTP
+        resend_res = client.post(
+            "/api/auth/register/resend-otp",
+            json={"email": test_email, "full_name": test_name},
+        )
+        assert resend_res.status_code == 200
+        assert "verification code has been sent" in resend_res.json()["message"].lower()
+
+        otp2 = otp_store._store[f"{test_email}::registration"]["otp"]
+        assert len(otp2) == 6
+
+        # 3. Simulate OTP expiration
+        otp_store._store[f"{test_email}::registration"]["expiry"] = time.time() - 10
+
+        exp_res = client.post(
+            "/api/auth/register/verify-otp",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+                "otp": otp2,
+            },
+        )
+        assert exp_res.status_code == 400
+        assert "expired" in exp_res.json()["detail"].lower()
+
+    finally:
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        db.close()
+
+
+def test_registration_otp_rate_limiting_lockout():
+    from app.database import SessionLocal
+    db = SessionLocal()
+    test_email = "lockout_test_user@naviscape.com"
+    test_password = "SecurePassword789!"
+    test_name = "Lockout Test User"
+
+    try:
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        otp_store.clear(test_email, purpose="registration")
+
+        # Request OTP
+        client.post(
+            "/api/auth/register",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+            },
+        )
+        correct_otp = otp_store._store[f"{test_email}::registration"]["otp"]
+
+        # Enter wrong OTP 5 times (max_attempts = 5)
+        for _ in range(5):
+            r = client.post(
+                "/api/auth/register/verify-otp",
+                json={
+                    "full_name": test_name,
+                    "email": test_email,
+                    "password": test_password,
+                    "confirm_password": test_password,
+                    "otp": "999999",
+                },
+            )
+            assert r.status_code == 400
+
+        # 6th attempt with correct OTP should be locked out
+        lockout_res = client.post(
+            "/api/auth/register/verify-otp",
+            json={
+                "full_name": test_name,
+                "email": test_email,
+                "password": test_password,
+                "confirm_password": test_password,
+                "otp": correct_otp,
+            },
+        )
+        assert lockout_res.status_code == 400
+        assert "too many failed attempts" in lockout_res.json()["detail"].lower()
+
+    finally:
+        db.query(User).filter(User.email == test_email).delete()
+        db.commit()
+        db.close()
+

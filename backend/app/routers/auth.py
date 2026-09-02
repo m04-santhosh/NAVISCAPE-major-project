@@ -21,6 +21,9 @@ from ..models.user import User
 from ..schemas.user import (
     ForgotPasswordRequest,
     MessageResponse,
+    RegisterOTPResponse,
+    RegisterResendOTPRequest,
+    RegisterVerifyOTPRequest,
     ResetPasswordRequest,
     TestEmailRequest,
     TokenResponse,
@@ -40,18 +43,21 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-# ── Registration / Signup ──────────────────────────────────────────────────────
+# ── Registration / Signup with Email OTP Flow ──────────────────────────────────
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-@router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=RegisterOTPResponse, status_code=status.HTTP_200_OK)
+@router.post("/signup", response_model=RegisterOTPResponse, status_code=status.HTTP_200_OK)
+@router.post("/register/request-otp", response_model=RegisterOTPResponse, status_code=status.HTTP_200_OK)
 async def register(
     data: UserRegister,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
-    Register a new user with Name, Email, Password, and Confirm Password.
-    Directly creates the user account and issues a JWT token.
+    Step 1 of Registration:
+    Validates registration data, generates a secure 6-digit OTP,
+    and sends the OTP to the user's email via Gmail SMTP.
+    Does NOT create a permanent account yet.
     """
     email = _normalize_email(data.email)
     name = (data.full_name or data.name or "").strip()
@@ -71,6 +77,76 @@ async def register(
             detail="An account with this email already exists. Please log in.",
         )
 
+    # Generate 6-digit OTP and store with 10-minute validity
+    otp = otp_store.generate_otp(email=email, purpose="registration")
+
+    # Send OTP email asynchronously via Gmail SMTP (non-blocking)
+    if email_service.is_configured:
+        background_tasks.add_task(
+            email_service.send_otp_email,
+            to_email=email,
+            otp_code=otp,
+            user_name=name or email.split("@")[0],
+            purpose="Account Registration",
+            validity_minutes=10,
+        )
+    else:
+        logger.warning(
+            "SMTP is not configured. Registration OTP generated for %s but could not be sent.",
+            email,
+        )
+
+    return RegisterOTPResponse(
+        status="otp_required",
+        message="Verification code sent to your email. Please enter the 6-digit OTP to complete registration.",
+        email=email,
+    )
+
+
+@router.post("/register/verify-otp", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/verify-registration-otp", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def verify_registration_otp(
+    data: RegisterVerifyOTPRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Step 2 of Registration:
+    Verifies the 6-digit OTP code against OTPStore, and upon success,
+    creates the permanent user account, hashes password, syncs to Firestore,
+    and returns a JWT authentication token.
+    """
+    email = _normalize_email(data.email)
+    name = (data.full_name or data.name or "").strip()
+
+    # Validate password confirmation
+    if data.password != data.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match.",
+        )
+
+    # Check if email is already registered
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email already exists. Please log in.",
+        )
+
+    # Verify and consume OTP for registration
+    is_valid, msg = otp_store.verify_otp(
+        email=email,
+        otp=data.otp,
+        purpose="registration",
+        consume=True,
+    )
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        )
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     hashed_pwd = hash_password(data.password)
 
@@ -79,7 +155,7 @@ async def register(
         full_name=name or email.split("@")[0],
         username=email,
         hashed_password=hashed_pwd,
-        pin_hash=hashed_pwd,  # Backward compatibility if queried
+        pin_hash=hashed_pwd,
         email_verified=True,
         is_active=True,
         created_at=now,
@@ -90,6 +166,24 @@ async def register(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Sync with Firestore (safe fallback if client not initialized)
+    try:
+        from ..repositories.firestore_repo import firestore_repo
+        if firestore_repo.db:
+            firestore_repo.create_or_update_user(
+                uid=str(new_user.id),
+                data={
+                    "email": new_user.email,
+                    "full_name": new_user.full_name,
+                    "username": new_user.username,
+                    "email_verified": True,
+                    "is_active": True,
+                    "sqlite_legacy_id": new_user.id,
+                },
+            )
+    except Exception as fs_err:
+        logger.warning("Firestore user sync error on registration: %s", fs_err)
 
     # Send welcome email asynchronously via BackgroundTasks (non-blocking)
     if email_service.is_configured:
@@ -103,6 +197,42 @@ async def register(
     return TokenResponse(
         access_token=token,
         user=UserResponse.model_validate(new_user),
+    )
+
+
+@router.post("/register/resend-otp", response_model=MessageResponse)
+async def resend_registration_otp(
+    data: RegisterResendOTPRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Resend registration 6-digit OTP code to the provided email.
+    """
+    email = _normalize_email(data.email)
+    name = (data.full_name or data.name or "").strip()
+
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email already exists. Please log in.",
+        )
+
+    otp = otp_store.generate_otp(email=email, purpose="registration")
+
+    if email_service.is_configured:
+        background_tasks.add_task(
+            email_service.send_otp_email,
+            to_email=email,
+            otp_code=otp,
+            user_name=name or email.split("@")[0],
+            purpose="Account Registration",
+            validity_minutes=10,
+        )
+
+    return MessageResponse(
+        message="A new verification code has been sent to your email address."
     )
 
 

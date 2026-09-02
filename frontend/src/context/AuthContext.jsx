@@ -120,41 +120,39 @@ export function AuthProvider({ children }) {
     }
   }, [_setSession]);
 
-  const register = useCallback(async (name, email, password, confirmPassword) => {
-    try {
-      // 1. Create user in Firebase Client SDK
-      const userCred = await createUserWithEmailAndPassword(auth, email, password);
-      const idToken = await getIdToken(userCred.user, true);
-      _setSession(idToken, {
-        id: userCred.user.uid,
-        email: userCred.user.email,
-        full_name: name || email.split('@')[0],
-        email_verified: userCred.user.emailVerified,
-        is_active: true,
-      });
+  const requestRegisterOtp = useCallback(async (name, email, password, confirmPassword) => {
+    const res = await api.post('/auth/register', {
+      full_name: name,
+      email,
+      password,
+      confirm_password: confirmPassword,
+    });
+    return res.data;
+  }, []);
 
-      // Sync with backend
-      try {
-        api.defaults.headers.common['Authorization'] = `Bearer ${idToken}`;
-        const res = await api.get('/auth/me');
-        setUser(res.data);
-        return res.data;
-      } catch {
-        return userCred.user;
-      }
-    } catch (firebaseErr) {
-      // Fallback to backend direct register if Firebase credentials are dummy/offline
-      console.warn('Firebase register attempt fallback to direct auth API:', firebaseErr.message);
-      const res = await api.post('/auth/register', {
-        full_name: name,
-        email,
-        password,
-        confirm_password: confirmPassword,
-      });
-      _setSession(res.data.access_token, res.data.user);
-      return res.data.user;
-    }
+  const verifyRegisterOtp = useCallback(async (name, email, password, confirmPassword, otp) => {
+    const res = await api.post('/auth/register/verify-otp', {
+      full_name: name,
+      email,
+      password,
+      confirm_password: confirmPassword,
+      otp: otp.trim(),
+    });
+    _setSession(res.data.access_token, res.data.user);
+    return res.data.user;
   }, [_setSession]);
+
+  const resendRegisterOtp = useCallback(async (email, name) => {
+    const res = await api.post('/auth/register/resend-otp', {
+      email,
+      full_name: name,
+    });
+    return res.data;
+  }, []);
+
+  const register = useCallback(async (name, email, password, confirmPassword) => {
+    return requestRegisterOtp(name, email, password, confirmPassword);
+  }, [requestRegisterOtp]);
 
   const logout = useCallback(async () => {
     try {
@@ -175,6 +173,9 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     login,
     register,
+    requestRegisterOtp,
+    verifyRegisterOtp,
+    resendRegisterOtp,
     logout,
   };
 

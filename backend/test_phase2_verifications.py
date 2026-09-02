@@ -31,7 +31,18 @@ def run_verifications():
     }
 
     res = client.post("/api/auth/register", json=reg_data)
-    if res.status_code == 201:
+    if res.status_code == 200 and res.json().get("status") == "otp_required":
+        from app.email_service import otp_store
+        otp_key = f"{reg_data['email']}::registration"
+        otp = otp_store._store[otp_key]["otp"]
+        verify_res = client.post(
+            "/api/auth/register/verify-otp",
+            json={**reg_data, "otp": otp},
+        )
+        assert verify_res.status_code == 201, f"Verify OTP failed: {verify_res.text}"
+        token = verify_res.json()["access_token"]
+        print("  [PASS] User registration & OTP verification: SUCCESS")
+    elif res.status_code == 201:
         token = res.json()["access_token"]
         print("  [PASS] User registration & token generation: SUCCESS")
     else:

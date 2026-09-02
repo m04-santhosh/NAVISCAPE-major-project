@@ -16,6 +16,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str
     confirm_password: str
+    otp: Optional[str] = None
 
     @field_validator("email", mode="before")
     @classmethod
@@ -28,6 +29,84 @@ class UserRegister(BaseModel):
         if len(v) < 6:
             raise ValueError("Password must be at least 6 characters long.")
         return v
+
+    @property
+    def display_name(self) -> str:
+        return (self.full_name or self.name or "").strip()
+
+
+class RegisterRequestOTP(BaseModel):
+    name: Optional[str] = None
+    full_name: Optional[str] = None
+    email: EmailStr
+    password: str
+    confirm_password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters long.")
+        return v
+
+    @property
+    def display_name(self) -> str:
+        return (self.full_name or self.name or "").strip()
+
+
+class RegisterVerifyOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str
+    name: Optional[str] = None
+    full_name: Optional[str] = None
+    password: str
+    confirm_password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v):
+        cleaned = str(v).strip()
+        if not cleaned:
+            raise ValueError("OTP is required.")
+        return cleaned
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters long.")
+        return v
+
+    @property
+    def display_name(self) -> str:
+        return (self.full_name or self.name or "").strip()
+
+
+class RegisterOTPResponse(BaseModel):
+    status: str = "otp_required"
+    message: str
+    email: str
+
+
+class RegisterResendOTPRequest(BaseModel):
+    email: EmailStr
+    name: Optional[str] = None
+    full_name: Optional[str] = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        return str(v).strip().lower()
 
     @property
     def display_name(self) -> str:

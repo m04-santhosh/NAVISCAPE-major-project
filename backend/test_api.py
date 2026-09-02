@@ -47,15 +47,33 @@ def test_auth_signup_flow():
     })
     assert res_bad.status_code == 400, f"Expected 400, got {res_bad.status_code}: {res_bad.json()}"
 
-    # Successful registration
+    # Step 1: Registration request (triggers OTP generation and email dispatch)
     res = client.post("/api/auth/register", json={
         "full_name": "Test User",
         "email": test_email,
         "password": "password123",
         "confirm_password": "password123"
     })
-    assert res.status_code == 201, f"Expected 201, got {res.status_code}: {res.json()}"
-    data = res.json()
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.json()}"
+    data_step1 = res.json()
+    assert data_step1.get("status") == "otp_required"
+    assert data_step1.get("email") == test_email
+
+    # Step 2: Retrieve OTP and verify
+    from app.email_service import otp_store
+    otp_key = f"{test_email}::registration"
+    assert otp_key in otp_store._store
+    otp = otp_store._store[otp_key]["otp"]
+
+    verify_res = client.post("/api/auth/register/verify-otp", json={
+        "full_name": "Test User",
+        "email": test_email,
+        "password": "password123",
+        "confirm_password": "password123",
+        "otp": otp,
+    })
+    assert verify_res.status_code == 201, f"Expected 201, got {verify_res.status_code}: {verify_res.json()}"
+    data = verify_res.json()
     assert "access_token" in data
     assert data["user"]["email"] == test_email
     assert data["user"]["email_verified"] is True
