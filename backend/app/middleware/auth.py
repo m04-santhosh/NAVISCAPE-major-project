@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models.user import User
-from ..firebase import verify_firebase_id_token
 
 # PIN hashing — bcrypt via passlib (same library already in requirements.txt)
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -79,12 +78,7 @@ async def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """
-    FastAPI dependency: extract, verify Firebase ID token (or legacy JWT), look up user.
-
-    1. Attempts Firebase ID Token verification via Firebase Admin SDK.
-    2. Falls back to signed JWT verification for existing tests and transitional sessions.
-    3. Finds or auto-syncs user entity and verifies account is active.
-
+    FastAPI dependency: extract and verify signed JWT access token, look up user in SQL database.
     Raises HTTP 401 for any authentication failure.
     """
     credentials_exception = HTTPException(
@@ -96,54 +90,6 @@ async def get_current_user(
     if not token:
         raise credentials_exception
 
-    # 1. Try Firebase ID Token Verification
-    fb_payload = verify_firebase_id_token(token)
-    if fb_payload:
-        uid = fb_payload.get("uid")
-        email = fb_payload.get("email")
-        if not email and uid:
-            email = f"{uid}@firebase.naviscape"
-
-        # Sync Firestore user document
-        from ..repositories.firestore_repo import firestore_repo
-        if firestore_repo.db:
-            fs_user = firestore_repo.get_user_by_uid(uid)
-            if not fs_user:
-                firestore_repo.create_or_update_user(
-                    uid,
-                    {
-                        "email": email,
-                        "full_name": fb_payload.get("name") or (email.split("@")[0] if email else "User"),
-                        "username": email.split("@")[0] if email else "user",
-                        "email_verified": fb_payload.get("email_verified", True),
-                        "is_active": True,
-                    },
-                )
-
-        # Lookup user by email in current database layer
-        user = db.query(User).filter(User.email == email).first()
-        if user is None:
-            # Auto-provision local record for Firebase authenticated user
-            user = User(
-                email=email,
-                full_name=fb_payload.get("name") or (email.split("@")[0] if email else "User"),
-                username=email.split("@")[0] if email else "user",
-                email_verified=fb_payload.get("email_verified", True),
-                is_active=True,
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is deactivated.",
-            )
-        return user
-
-
-    # 2. Fallback to standard signed JWT Token Verification
     payload = _decode_token(token)
     if payload is None:
         raise credentials_exception
@@ -156,7 +102,7 @@ async def get_current_user(
         user_id = int(user_id_str)
         user = db.query(User).filter(User.id == user_id).first()
     except (ValueError, TypeError):
-        # In case sub was an email or string UID
+        # In case sub was an email or string identifier
         user = db.query(User).filter(User.email == str(user_id_str)).first()
 
     if user is None:

@@ -13,4 +13,3 @@ joblib==1.4.2
 httpx==0.27.0
 psycopg2-binary==2.9.9
 sqlalchemy-libsql>=0.2.0
-firebase-admin>=6.5.0

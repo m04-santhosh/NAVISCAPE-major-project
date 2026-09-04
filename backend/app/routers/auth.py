@@ -113,7 +113,7 @@ async def verify_registration_otp(
     """
     Step 2 of Registration:
     Verifies the 6-digit OTP code against OTPStore, and upon success,
-    creates the permanent user account, hashes password, syncs to Firestore,
+    creates the permanent user account in the SQL database, hashes password with bcrypt,
     and returns a JWT authentication token.
     """
     email = _normalize_email(data.email)
@@ -183,57 +183,6 @@ async def verify_registration_otp(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to persist user registration in database.",
         )
-
-    # Sync with Firestore (safe fallback if client not initialized or quota exceeded)
-    collection_target = "users"
-    doc_target = str(new_user.id)
-    logger.info(
-        "[AUTH] Firestore write started -> target collection='%s', document_id='%s', email=%s",
-        collection_target,
-        doc_target,
-        email,
-    )
-    try:
-        from ..repositories.firestore_repo import firestore_repo
-        if not firestore_repo.db:
-            logger.warning(
-                "[AUTH] Firestore client is not initialized (db=None). Skipping Firestore user write for '%s/%s'.",
-                collection_target,
-                doc_target,
-            )
-        else:
-            firestore_repo.create_or_update_user(
-                uid=doc_target,
-                data={
-                    "email": new_user.email,
-                    "full_name": new_user.full_name,
-                    "username": new_user.username,
-                    "email_verified": True,
-                    "is_active": True,
-                    "sqlite_legacy_id": new_user.id,
-                },
-            )
-            logger.info(
-                "[AUTH] Firestore write succeeded -> target '%s/%s'",
-                collection_target,
-                doc_target,
-            )
-    except Exception as fs_err:
-        err_msg = str(fs_err)
-        if "429" in err_msg or "Quota exceeded" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-            logger.error(
-                "[AUTH] Firestore write FAILED due to Google Cloud Firestore Quota Exceeded (RESOURCE_EXHAUSTED / 429) -> target '%s/%s': %s",
-                collection_target,
-                doc_target,
-                fs_err,
-            )
-        else:
-            logger.error(
-                "[AUTH] Firestore write FAILED with exception -> target '%s/%s': %s",
-                collection_target,
-                doc_target,
-                fs_err,
-            )
 
     # Send welcome email asynchronously via BackgroundTasks (non-blocking)
     if email_service.is_configured:
