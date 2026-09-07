@@ -3,7 +3,7 @@ Accident Data ORM Model — Karnataka Dataset Schema
 Stores historical accident records with all fields from the Karnataka Accident Dataset.
 """
 
-from sqlalchemy import Column, Integer, Float, String, DateTime, Text, func
+from sqlalchemy import Column, Integer, Float, String, DateTime, Text, func, Index
 from ..database import Base
 
 
@@ -52,6 +52,10 @@ class AccidentData(Base):
     longitude = Column(Float, nullable=True, index=True)
 
     created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_accident_data_lat_lng", "latitude", "longitude"),
+    )
 
     def __repr__(self):
         return f"<AccidentData(id={self.id}, crime_no='{self.crime_no}', severity='{self.severity}', loc=({self.latitude},{self.longitude}))>"

@@ -3,7 +3,7 @@ Road Hazard ORM Model
 Stores real-time road hazard reports submitted by authenticated users.
 """
 
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Text, func
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Text, func, Index
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -20,6 +20,10 @@ class RoadHazard(Base):
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     status = Column(String(20), default="Active", nullable=False, index=True)  # Active / Resolved
+
+    __table_args__ = (
+        Index("ix_road_hazards_lat_lng", "latitude", "longitude"),
+    )
 
     # Relationship to user
     user = relationship("User")

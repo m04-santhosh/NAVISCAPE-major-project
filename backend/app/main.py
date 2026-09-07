@@ -159,51 +159,8 @@ async def health_check(db: Session = Depends(get_db)):
     else:
         health_status["services"]["lstm_traffic_model"] = "untrained (requires more real data)"
 
-    # 5. SMTP Configuration Check
-    health_status["services"]["smtp_configured"] = bool(
-        settings.SMTP_HOST and settings.SMTP_USERNAME and settings.SMTP_PASSWORD
-    )
-
     if health_status["status"] == "unhealthy":
         raise HTTPException(status_code=500, detail=health_status)
 
     return health_status
-
-
-@app.post("/api/test-email", tags=["Root"])
-async def dev_test_email(data: dict):
-    """
-    Send a test email via Gmail SMTP.
-    Only enabled in development / DEBUG mode for security.
-    """
-    if not settings.DEBUG:
-        raise HTTPException(
-            status_code=403,
-            detail="Public test email endpoint is disabled in production mode.",
-        )
-
-    recipient = (data.get("recipient_email") or data.get("email") or "").strip().lower()
-    if not recipient or "@" not in recipient:
-        raise HTTPException(
-            status_code=400,
-            detail="A valid recipient email address is required.",
-        )
-
-    from .email_service import email_service
-    result = email_service.send_email(
-        to_email=recipient,
-        subject=data.get("subject", "NAVISCAPE Gmail SMTP Test"),
-        body_text=data.get("message", "Hello! This test email confirms that NAVISCAPE Gmail SMTP is working properly."),
-    )
-
-    if not result.get("success"):
-        raise HTTPException(
-            status_code=500,
-            detail=result.get("message", "Failed to send email via SMTP."),
-        )
-
-    return {
-        "status": "success",
-        "message": f"Test email sent successfully to {recipient}.",
-    }
 

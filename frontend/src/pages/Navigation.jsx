@@ -1833,7 +1833,7 @@ export default function Navigation() {
           {/* TomTom Real-Time Traffic Overlay Layer */}
           {showTraffic && (
             <TileLayer
-              url="http://127.0.0.1:8000/api/traffic/tile/{z}/{x}/{y}"
+              url={`${api.defaults.baseURL?.replace(/\/+$/, '') || '/api'}/traffic/tile/{z}/{x}/{y}`}
               tileSize={256}
               opacity={0.75}
               attribution='Traffic &copy; TomTom'

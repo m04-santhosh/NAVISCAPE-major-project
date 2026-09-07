@@ -257,6 +257,24 @@ def _migrate_trusted_contacts_whatsapp():
         print(f"[MIGRATE] trusted_contacts WhatsApp migration warning: {exc}")
 
 
+def _migrate_coordinate_indexes():
+    """
+    Ensures composite spatial indexes exist on tables with coordinate queries
+    (accident_data, hospital_facilities, police_stations, road_hazards).
+    Idempotent — safe to run on every startup.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accident_data_lat_lng ON accident_data (latitude, longitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hospital_facilities_lat_lng ON hospital_facilities (latitude, longitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_police_stations_lat_lng ON police_stations (latitude, longitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_road_hazards_lat_lng ON road_hazards (latitude, longitude)"))
+            conn.commit()
+            print("[MIGRATE] Ensured spatial composite indexes on coordinate tables.")
+    except Exception as exc:
+        print(f"[MIGRATE] coordinate indexes migration warning: {exc}")
+
+
 def init_db():
     """Create all tables and run additive migrations. Called on application startup."""
     # Register all models so Base.metadata knows about them
@@ -280,3 +298,6 @@ def init_db():
     if is_sqlite:
         # Ensure unique index on newly created traffic_hourly table
         _migrate_traffic_hourly_table()
+        # Ensure composite coordinate indexes on accident_data, hospital_facilities, police_stations, road_hazards
+        _migrate_coordinate_indexes()
+

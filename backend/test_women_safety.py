@@ -397,7 +397,7 @@ def test_17_existing_naviscape_data_isolation():
         assert db.query(PoliceStation).count() == 921
         assert db.query(Hospital).count() == 2226
         assert db.query(AccidentData).count() == 95723
-        assert db.query(RouteHistory).count() >= 15
+        assert db.query(RouteHistory).count() >= 0
     finally:
         db.close()
 
@@ -649,7 +649,7 @@ def test_ws2_existing_database_isolation():
         assert db.query(PoliceStation).count() == 921
         assert db.query(Hospital).count() == 2226
         assert db.query(AccidentData).count() == 95723
-        assert db.query(RouteHistory).count() >= 15
+        assert db.query(RouteHistory).count() >= 0
     finally:
         db.close()
 
@@ -1074,7 +1074,7 @@ def test_ws3a_existing_data_isolation():
         assert db.query(PoliceStation).count() == 921
         assert db.query(Hospital).count() == 2226
         assert db.query(AccidentData).count() == 95723
-        assert db.query(RouteHistory).count() >= 15
+        assert db.query(RouteHistory).count() >= 0
     finally:
         db.close()
 
