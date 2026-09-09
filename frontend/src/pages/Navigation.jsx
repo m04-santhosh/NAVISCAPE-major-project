@@ -38,7 +38,6 @@ const ROUTE_LABELS = { shortest: 'Fastest Route', safest: 'Safest Route', balanc
 
 // Traffic level helpers
 const TRAFFIC_COLOR = { Low: 'text-green-400', Moderate: 'text-yellow-400', High: 'text-orange-400', Severe: 'text-red-400' };
-const TRAFFIC_BG = { Low: 'bg-green-500/15', Moderate: 'bg-yellow-500/15', High: 'bg-orange-500/15', Severe: 'bg-red-500/15' };
 const TRAFFIC_ICON = { Low: '🟢', Moderate: '🟡', High: '🟠', Severe: '🔴' };
 
 /* ---- OSRM API: fetch real road routes ---- */

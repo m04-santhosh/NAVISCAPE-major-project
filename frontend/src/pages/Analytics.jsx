@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid, Legend, RadarChart, Radar,
-  PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
 import { HiChartBar, HiShieldExclamation, HiTrendingUp, HiLocationMarker } from 'react-icons/hi';

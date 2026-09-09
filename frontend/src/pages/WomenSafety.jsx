@@ -5,7 +5,6 @@ import {
   HiUserGroup,
   HiPhone,
   HiMail,
-  HiLocationMarker,
   HiPlus,
   HiPencil,
   HiTrash,
@@ -13,7 +12,6 @@ import {
   HiExclamationCircle,
   HiXCircle,
   HiInformationCircle,
-  HiExclamation,
   HiStop,
 } from 'react-icons/hi';
 import womenSafetyService from '../services/womenSafety';

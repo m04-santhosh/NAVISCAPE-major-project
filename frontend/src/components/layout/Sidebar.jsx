@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import toast from 'react-hot-toast';
@@ -25,7 +25,6 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(true); // Collapsed by default
-  const navigate = useNavigate();
 
   const handlePlaceholderClick = (e, item) => {
     if (item.isPlaceholder) {
