@@ -17,7 +17,7 @@ import {
 
 const navItems = [
   { to: '/navigate', icon: IconMap, label: 'Navigation' },
-  { to: '/analytics', icon: IconAnalytics, label: 'Analytics' },
+  { to: '/analytics', icon: IconAnalytics, label: 'Dashboard' },
   { to: '/women-safety', icon: IconShield, label: 'Women Safety' },
 ];
 
