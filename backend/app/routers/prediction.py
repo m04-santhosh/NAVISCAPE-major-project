@@ -14,7 +14,13 @@ from ..schemas.prediction import (
     TrafficPredictionRequest, TrafficPredictionResponse,
     RiskPredictionRequest, RiskPredictionResponse,
 )
+from ..schemas.predictive_route import (
+    RouteRiskPredictionRequest, RouteRiskPredictionResponse,
+    RouteComparisonRequest, RouteComparisonResponse,
+)
 from ..services.risk_ml import predict_xgboost_risk
+from ..services.predictive_route_risk import evaluate_predictive_route_risk
+from ..services.route_comparison import compare_predictive_routes
 
 router = APIRouter(prefix="/api/predict", tags=["Predictions"])
 
@@ -264,4 +270,60 @@ async def get_accident_heatmap(
             "severity": r.severity or "Unknown",
         })
     return points
+
+
+@router.post("/route-risk", response_model=RouteRiskPredictionResponse)
+async def predict_route_risk(
+    data: RouteRiskPredictionRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 3A: Predictive Route Risk Engine.
+    Evaluates end-to-end route risk using the trained XGBoost model along waypoints,
+    blended with historical Karnataka accident density, severe casualty counts,
+    active road hazards, and traffic flow intelligence.
+    """
+    result = evaluate_predictive_route_risk(
+        db=db,
+        source_lat=data.source_lat,
+        source_lng=data.source_lng,
+        destination_lat=data.destination_lat,
+        destination_lng=data.destination_lng,
+        waypoints=data.waypoints,
+        distance_km=data.distance_km,
+        duration_min=data.duration_min,
+        weather=data.weather or "Clear",
+        road_condition=data.road_condition or "Not Applicable",
+        surface_condition=data.surface_condition or "Not Applicable",
+    )
+    return RouteRiskPredictionResponse(**result)
+
+
+@router.post("/route-comparison", response_model=RouteComparisonResponse)
+async def predict_route_comparison(
+    data: RouteComparisonRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 3B: Predictive Route Comparison Engine.
+    Compares multiple actual routing alternatives and generates predictive safety intelligence,
+    historical accident exposure metrics, traffic flow risks, and objective trade-off summaries.
+    """
+    candidate_routes_raw = [r.model_dump() for r in data.routes] if data.routes else None
+    result = compare_predictive_routes(
+        db=db,
+        source_lat=data.source_lat,
+        source_lng=data.source_lng,
+        destination_lat=data.destination_lat,
+        destination_lng=data.destination_lng,
+        candidate_routes=candidate_routes_raw,
+        weather=data.weather or "Clear",
+        road_condition=data.road_condition or "Not Applicable",
+        surface_condition=data.surface_condition or "Not Applicable",
+    )
+    return RouteComparisonResponse(**result)
+
+
 

@@ -248,6 +248,7 @@ export default function Navigation() {
   const [recommendedRouteId, setRecommendedRouteId] = useState(null);
   const [recommendationReasons, setRecommendationReasons] = useState([]);
   const [riskZones, setRiskZones] = useState([]);
+  const [tradeOffSummary, setTradeOffSummary] = useState(null);
   const [loading, setLoading] = useState(false);
   const [bounds, setBounds] = useState(null);
   const [showSourceDD, setShowSourceDD] = useState(false);
@@ -420,6 +421,7 @@ export default function Navigation() {
     setSelectedRoute(null);
     setRecommendedRouteId(null);
     setRecommendationReasons([]);
+    setTradeOffSummary(null);
     setBounds(null);
   };
 
@@ -591,6 +593,22 @@ export default function Navigation() {
         }]);
       } catch {
         setRiskZones([]);
+      }
+
+      // Phase 3B: Predictive Route Comparison & Trade-Offs
+      try {
+        const compRes = await api.post('/predict/route-comparison', {
+          source_lat: effectiveSrcCoord[0],
+          source_lng: effectiveSrcCoord[1],
+          destination_lat: effectiveDstCoord[0],
+          destination_lng: effectiveDstCoord[1],
+          routes: candidatePayload,
+        });
+        if (compRes.data?.trade_off_summary) {
+          setTradeOffSummary(compRes.data.trade_off_summary);
+        }
+      } catch (compErr) {
+        console.warn('Predictive route comparison fallback:', compErr);
       }
 
       const allPts = processed.flatMap(r => r.waypoints);
@@ -1717,6 +1735,32 @@ export default function Navigation() {
             );
           })}
         </div>
+
+        {/* Phase 3B: Predictive Route Comparison & Trade-Off Summary */}
+        {tradeOffSummary && tradeOffSummary.tradeoff_notes?.length > 0 && (
+          <div className="p-3 rounded-xl bg-surface-800/80 border border-surface-700/60 text-xs space-y-2">
+            <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-cyan-400">
+              <span>Predictive Trade-Off Comparison</span>
+              {tradeOffSummary.safety_score_difference != null && tradeOffSummary.safety_score_difference > 0 && (
+                <span className="text-emerald-400">Δ Safety: ±{tradeOffSummary.safety_score_difference}</span>
+              )}
+            </div>
+            <div className="space-y-1">
+              {tradeOffSummary.tradeoff_notes.map((note, idx) => (
+                <div key={idx} className="text-[11px] text-surface-300 flex items-start gap-1.5">
+                  <span className="text-cyan-400 font-bold">•</span>
+                  <span>{note}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {routes.length <= 1 && (
+          <div className="text-[11px] text-surface-400 italic px-1">
+            Alternative routes are not currently available for this corridor.
+          </div>
+        )}
 
         {/* START NAVIGATION BUTTON */}
         <button
