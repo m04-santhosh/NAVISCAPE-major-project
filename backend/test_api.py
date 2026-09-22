@@ -47,15 +47,44 @@ def test_auth_signup_flow():
     })
     assert res_bad.status_code == 400, f"Expected 400, got {res_bad.status_code}: {res_bad.json()}"
 
-    # Direct Registration: creates user in SQL and returns JWT
+    # Step 1: Registration request (triggers OTP generation and email dispatch)
     res = client.post("/api/auth/register", json={
         "full_name": "Test User",
         "email": test_email,
         "password": "password123",
         "confirm_password": "password123"
     })
-    assert res.status_code == 201, f"Expected 201, got {res.status_code}: {res.json()}"
-    data = res.json()
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.json()}"
+    data_step1 = res.json()
+    assert data_step1.get("status") == "otp_required"
+    assert data_step1.get("email") == test_email
+
+    # Step 2: Retrieve OTP from SQL otp_records and verify
+    from app.models.otp import OTPRecord
+    from app.services.otp_service import hash_otp
+    db_verify = SessionLocal()
+    try:
+        otp_rec = db_verify.query(OTPRecord).filter(OTPRecord.email == test_email, OTPRecord.verified == False).first()
+        assert otp_rec is not None, "OTP record not found in database!"
+        otp = None
+        for code in range(1000000):
+            candidate = f"{code:06d}"
+            if hash_otp(test_email, candidate) == otp_rec.otp_hash:
+                otp = candidate
+                break
+        assert otp is not None, "Could not resolve OTP code from hash"
+    finally:
+        db_verify.close()
+
+    verify_res = client.post("/api/auth/register/verify-otp", json={
+        "full_name": "Test User",
+        "email": test_email,
+        "password": "password123",
+        "confirm_password": "password123",
+        "otp": otp,
+    })
+    assert verify_res.status_code == 201, f"Expected 201, got {verify_res.status_code}: {verify_res.json()}"
+    data = verify_res.json()
     assert "access_token" in data
     assert data["user"]["email"] == test_email
     assert data["user"]["email_verified"] is True

@@ -73,16 +73,39 @@ export function AuthProvider({ children }) {
     return res.data.user;
   }, [_setSession]);
 
-  const register = useCallback(async (name, email, password, confirmPassword) => {
+  const requestRegisterOtp = useCallback(async (name, email, password, confirmPassword) => {
     const res = await api.post('/auth/register', {
       full_name: name,
       email,
       password,
       confirm_password: confirmPassword,
     });
+    return res.data;
+  }, []);
+
+  const verifyRegisterOtp = useCallback(async (name, email, password, confirmPassword, otp) => {
+    const res = await api.post('/auth/register/verify-otp', {
+      full_name: name,
+      email,
+      password,
+      confirm_password: confirmPassword,
+      otp: otp.trim(),
+    });
     _setSession(res.data.access_token, res.data.user);
     return res.data.user;
   }, [_setSession]);
+
+  const resendRegisterOtp = useCallback(async (email, name) => {
+    const res = await api.post('/auth/register/resend-otp', {
+      email,
+      full_name: name,
+    });
+    return res.data;
+  }, []);
+
+  const register = useCallback(async (name, email, password, confirmPassword) => {
+    return requestRegisterOtp(name, email, password, confirmPassword);
+  }, [requestRegisterOtp]);
 
   const logout = useCallback(async () => {
     try {
@@ -103,6 +126,9 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     login,
     register,
+    requestRegisterOtp,
+    verifyRegisterOtp,
+    resendRegisterOtp,
     logout,
   };
 
