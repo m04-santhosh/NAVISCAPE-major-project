@@ -82,9 +82,6 @@ python train_traffic_model.py  # Train LSTM model
 python train_risk_model.py     # Train XGBoost model
 ```
 
-## Default Credentials
-- **Admin**: username `admin` / password `admin123`
-- Register new accounts via the signup page
 
 ## API Endpoints
 
@@ -130,4 +127,4 @@ docker-compose up --build
 This project is developed for academic purposes as a final-year BE AI & Data Science project.
 
 ---
-Built with ❤️ using React, FastAPI, TensorFlow, and OpenStreetMap
+Built with using React, FastAPI, TensorFlow, and OpenStreetMap
