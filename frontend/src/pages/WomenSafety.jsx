@@ -15,15 +15,39 @@ import {
   HiStop,
 } from 'react-icons/hi';
 import womenSafetyService from '../services/womenSafety';
+import {
+  buildEmergencyWhatsAppMessage,
+  openWhatsAppAlert,
+  copyEmergencyMessage,
+  normalizePhoneNumber,
+} from '../utils/emergencyMessage';
+
+function formatActivationTime(dateInput) {
+  if (!dateInput) return 'Just now';
+  try {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return 'Just now';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = d.toLocaleString('en-US', { month: 'short' });
+    const year = d.getFullYear();
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    return `${day} ${month} ${year}, ${time}`;
+  } catch {
+    return 'Just now';
+  }
+}
 
 export default function WomenSafety() {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState(null);
 
-  // Active Emergency State (WS-2)
+  // Active Emergency State (WS-1)
   const [activeEmergency, setActiveEmergency] = useState(null);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancellingEmergency, setCancellingEmergency] = useState(false);
+
+  // SOS Trigger & Loading Phase States (WS-1)
+  const [sosPhaseText, setSosPhaseText] = useState('');
 
   // SOS 3-Second Hold State (WS-2)
   const [holdProgress, setHoldProgress] = useState(0); // 0 to 100
@@ -54,246 +78,197 @@ export default function WomenSafety() {
   const [contactToDelete, setContactToDelete] = useState(null);
   const [deletingContact, setDeletingContact] = useState(false);
 
-  // WS-3B: WhatsApp Alert State & Flow Tracking
-  const [whatsappAlerts, setWhatsappAlerts] = useState(null);
-  const [loadingWhatsappAlerts, setLoadingWhatsappAlerts] = useState(false);
-  const [whatsappStatus, setWhatsappStatus] = useState({}); // { [contactId]: { status: 'opened' | 'error', message: string } }
+  // WS-3: Live Emergency Timeline & Action Tracking
+  const [timeline, setTimeline] = useState([]);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
+  const [resolvingEmergency, setResolvingEmergency] = useState(false);
 
-  // Fetch overview data and active emergency session on load
-  const fetchOverview = useCallback(async (showLoading = true) => {
-    if (showLoading) setLoading(true);
+  // Fetch timeline for active emergency session
+  const fetchTimeline = useCallback(async (eventId) => {
+    if (!eventId) {
+      setTimeline([]);
+      return;
+    }
+    setLoadingTimeline(true);
     try {
-      const [overviewData, activeEventData] = await Promise.all([
-        womenSafetyService.getOverview(),
-        womenSafetyService.getActiveEmergencyEvent(),
-      ]);
-
-      setOverview(overviewData);
-      if (overviewData.emergency_profile) {
-        setEmergencyMobile(overviewData.emergency_profile.emergency_mobile || '');
-        setEmergencyEmail(overviewData.emergency_profile.emergency_email || '');
-        setConsent(Boolean(overviewData.emergency_profile.location_sharing_consent));
-      } else {
-        setConsent(false);
-      }
-
-      if (activeEventData.has_active_event && activeEventData.event) {
-        setActiveEmergency(activeEventData.event);
-        // WS-3B: Auto-fetch WhatsApp alerts for active emergency
-        try {
-          setLoadingWhatsappAlerts(true);
-          const alertsData = await womenSafetyService.getWhatsAppAlerts(activeEventData.event.id);
-          setWhatsappAlerts(alertsData);
-        } catch (err) {
-          console.error('Failed to fetch WhatsApp alerts:', err);
-          setWhatsappAlerts(null);
-        } finally {
-          setLoadingWhatsappAlerts(false);
+      const res = await womenSafetyService.getTimeline(eventId);
+      if (res && res.timeline) {
+        setTimeline(res.timeline);
+        if (res.status) {
+          setActiveEmergency((prev) => (prev ? { ...prev, status: res.status } : prev));
         }
-      } else {
-        setActiveEmergency(null);
-        setWhatsappAlerts(null);
-        setWhatsappStatus({});
       }
     } catch (err) {
-      console.error('Failed to fetch emergency profile overview:', err);
-      toast.error('Unable to load Women Safety profile. Please try again.');
+      console.error('Failed to fetch emergency timeline:', err);
     } finally {
-      if (showLoading) setLoading(false);
+      setLoadingTimeline(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchOverview(true);
-  }, [fetchOverview]);
-
-  // Clean up timers on unmount
-  useEffect(() => {
-    return () => {
-      if (holdTimerRef.current) {
-        clearInterval(holdTimerRef.current);
-        holdTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const isProfileComplete = Boolean(overview?.profile_complete);
-  const contactsCount = overview?.contacts_count || 0;
-
-  // ── WS-2: SOS 3-Second Hold Logic ──────────────────────────────────────────
-
-  const startHold = (e) => {
-    // Prevent default context menu or unwanted selections
-    if (e && e.cancelable && e.type !== 'touchstart') e.preventDefault();
-
-    if (!isProfileComplete) {
-      toast.error('Please complete your Women Safety profile before activating SOS.', { id: 'sos-gate-toast' });
-      return;
+    if (activeEmergency?.id) {
+      fetchTimeline(activeEmergency.id);
     }
+  }, [activeEmergency?.id, fetchTimeline]);
 
-    if (activeEmergency) {
-      toast('An emergency session is already active.', { icon: '🔴', id: 'sos-already-active' });
-      return;
-    }
+  // ── WS-2 & WS-3: Real Device WhatsApp Alert, Call & Action Handlers ──────
 
-    setIsHolding(true);
-    setHoldProgress(0);
-    holdStartTimeRef.current = Date.now();
-
-    if (holdTimerRef.current) clearInterval(holdTimerRef.current);
-
-    holdTimerRef.current = setInterval(() => {
-      const elapsed = Date.now() - holdStartTimeRef.current;
-      const progress = Math.min(100, (elapsed / 3000) * 100);
-      setHoldProgress(progress);
-
-      if (elapsed >= 3000) {
-        clearInterval(holdTimerRef.current);
-        holdTimerRef.current = null;
-        setIsHolding(false);
-        setHoldProgress(0);
-        // 3-second hold completed: Open Confirmation Dialog
-        setIsConfirmSosModalOpen(true);
-      }
-    }, 50);
-  };
-
-  const cancelHold = () => {
-    if (holdTimerRef.current) {
-      clearInterval(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-    setIsHolding(false);
-    setHoldProgress(0);
-    holdStartTimeRef.current = null;
-  };
-
-  // ── WS-2: Confirm SOS Activation & GPS Capture ─────────────────────────────
-
-  const handleConfirmSOS = () => {
-    setIsConfirmSosModalOpen(false);
-
-    if (!navigator.geolocation) {
-      toast.error('Geolocation is not supported by your browser.');
-      return;
-    }
-
-    setActivatingSos(true);
-    const toastId = toast.loading('Capturing accurate GPS location...');
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-
-        if (latitude == null || longitude == null || isNaN(latitude) || isNaN(longitude)) {
-          toast.error('Invalid GPS coordinates received.', { id: toastId });
-          setActivatingSos(false);
-          return;
-        }
-
-        try {
-          toast.loading('Activating emergency session...', { id: toastId });
-          const event = await womenSafetyService.triggerSOS({
-            latitude,
-            longitude,
-            location_accuracy_m: accuracy || null,
-          });
-
-          setActiveEmergency(event);
-          // WS-3B: Fetch WhatsApp alerts for newly created emergency
-          try {
-            setLoadingWhatsappAlerts(true);
-            const alertsData = await womenSafetyService.getWhatsAppAlerts(event.id);
-            setWhatsappAlerts(alertsData);
-          } catch {
-            setWhatsappAlerts(null);
-          } finally {
-            setLoadingWhatsappAlerts(false);
-          }
-          toast.success('🚨 Emergency session activated!', { id: toastId, icon: '🔴', duration: 4000 });
-        } catch (err) {
-          const msg = err.response?.data?.detail || 'Failed to activate emergency mode.';
-          toast.error(msg, { id: toastId });
-        } finally {
-          setActivatingSos(false);
-        }
-      },
-      (err) => {
-        setActivatingSos(false);
-        let errorMsg = 'Your current location could not be determined.';
-        if (err.code === 1) {
-          errorMsg = 'Location permission is required to activate emergency mode.';
-        } else if (err.code === 3) {
-          errorMsg = 'Location request timed out. Please try again.';
-        }
-        toast.error(errorMsg, { id: toastId });
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 0,
-      }
-    );
-  };
-
-  // ── WS-2: Cancel Active Emergency Event ────────────────────────────────────
-
-  const handleConfirmCancelEmergency = async () => {
+  const handleTriggerWhatsApp = async (phone, contactKey, contactName) => {
     if (!activeEmergency) return;
 
-    setCancellingEmergency(true);
-    const toastId = toast.loading('Cancelling emergency session...');
-
-    try {
-      await womenSafetyService.cancelEmergencyEvent(activeEmergency.id);
-      setActiveEmergency(null);
-      setWhatsappAlerts(null);
-      setWhatsappStatus({});
-      setIsCancelModalOpen(false);
-      toast.success('Emergency session cancelled.', { id: toastId, icon: '🛡️' });
-    } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to cancel emergency session.';
-      toast.error(msg, { id: toastId });
-    } finally {
-      setCancellingEmergency(false);
+    if (!phone || !normalizePhoneNumber(phone)) {
+      setWhatsappStatus((prev) => ({
+        ...prev,
+        [contactKey]: {
+          status: 'error',
+          message: 'WhatsApp unavailable — no valid mobile number configured.',
+        },
+      }));
+      toast.error('WhatsApp unavailable — no valid mobile number configured.');
+      return;
     }
-  };
-
-  // ── WS-3B: Real Device WhatsApp Click-to-Chat Flow Handler ───────────────
-
-  const handleSendWhatsAppAlert = (alert) => {
-    if (!alert || !alert.whatsapp_url) return;
 
     try {
-      // Open the pre-filled wa.me click-to-chat URL in a new window/tab
-      const newTab = window.open(alert.whatsapp_url, '_blank', 'noopener,noreferrer');
+      const message = buildEmergencyWhatsAppMessage({
+        latitude: activeEmergency.latitude,
+        longitude: activeEmergency.longitude,
+        accuracy: activeEmergency.accuracy_m ?? activeEmergency.location_accuracy_m,
+        triggeredAt: activeEmergency.triggered_at,
+        contactName,
+      });
 
-      // Check if browser blocked popup or failed to open
-      if (!newTab || newTab.closed || typeof newTab.closed === 'undefined') {
+      const res = openWhatsAppAlert(phone, message);
+
+      if (res.success) {
         setWhatsappStatus((prev) => ({
           ...prev,
-          [alert.contact_id]: {
-            status: 'error',
-            message: 'Unable to open WhatsApp. Please open WhatsApp manually and send the emergency message.',
+          [contactKey]: {
+            status: 'opened',
+            message: 'WhatsApp opened. Press Send inside WhatsApp to deliver.',
           },
         }));
+        toast.success(`WhatsApp opened for ${contactName}. Tap Send in WhatsApp to deliver.`, { icon: '📱' });
+
+        try {
+          await womenSafetyService.recordAction(activeEmergency.id, {
+            action_type: 'WHATSAPP_OPENED',
+            contact_type: contactKey === 'primary' ? 'PRIMARY' : 'TRUSTED',
+            contact_name: contactName,
+            contact_phone: phone,
+          });
+          fetchTimeline(activeEmergency.id);
+        } catch (e) {
+          console.error('Failed to record WHATSAPP_OPENED action:', e);
+        }
       } else {
         setWhatsappStatus((prev) => ({
           ...prev,
-          [alert.contact_id]: {
-            status: 'opened',
-            message: 'WhatsApp opened — press Send to deliver the alert.',
+          [contactKey]: {
+            status: 'error',
+            message: 'WhatsApp could not be opened automatically. Please allow pop-ups or use the contact button again.',
           },
         }));
+        toast.error('WhatsApp could not be opened automatically. Please allow pop-ups or try again.');
       }
-    } catch {
+    } catch (err) {
+      console.error('Failed to trigger WhatsApp alert:', err);
+      toast.error('Failed to prepare emergency WhatsApp message.');
+    }
+  };
+
+  const handleConfirmAlertSent = async (contactName, contactKey, phone) => {
+    if (!activeEmergency) return;
+    try {
+      await womenSafetyService.recordAction(activeEmergency.id, {
+        action_type: 'ALERT_SENT_CONFIRMED',
+        contact_type: contactKey === 'primary' ? 'PRIMARY' : 'TRUSTED',
+        contact_name: contactName,
+        contact_phone: phone,
+      });
+
       setWhatsappStatus((prev) => ({
         ...prev,
-        [alert.contact_id]: {
-          status: 'error',
-          message: 'Unable to open WhatsApp. Please open WhatsApp manually and send the emergency message.',
+        [contactKey]: {
+          status: 'confirmed',
+          message: 'Alert sent confirmed by user.',
         },
       }));
+
+      toast.success(`Alert confirmed as sent to ${contactName}.`, { icon: '✓' });
+      fetchTimeline(activeEmergency.id);
+    } catch (err) {
+      console.error('Failed to confirm alert sent:', err);
+      toast.error('Failed to record alert confirmation.');
+    }
+  };
+
+  const handleInitiateCall = async (phone, contactName, contactType) => {
+    if (!activeEmergency) return;
+    try {
+      const actionType = contactType === 'POLICE' ? 'POLICE_CALLED' : 'EMERGENCY_CONTACT_CALLED';
+      await womenSafetyService.recordAction(activeEmergency.id, {
+        action_type: actionType,
+        contact_type: contactType,
+        contact_name: contactName,
+        contact_phone: phone,
+      });
+
+      toast.success(`Emergency call to ${contactName} (${phone}) initiated. Confirm on your device.`, { icon: '📞' });
+      fetchTimeline(activeEmergency.id);
+    } catch (err) {
+      console.error('Failed to record call action:', err);
+    } finally {
+      window.location.href = `tel:${phone}`;
+    }
+  };
+
+  const handleCopyWhatsAppMessage = async (contactName, contactKey) => {
+    if (!activeEmergency) return;
+    try {
+      const message = buildEmergencyWhatsAppMessage({
+        latitude: activeEmergency.latitude,
+        longitude: activeEmergency.longitude,
+        accuracy: activeEmergency.accuracy_m ?? activeEmergency.location_accuracy_m,
+        triggeredAt: activeEmergency.triggered_at,
+        contactName,
+      });
+
+      const success = await copyEmergencyMessage(message);
+      if (success) {
+        setWhatsappStatus((prev) => ({
+          ...prev,
+          [contactKey]: {
+            status: 'copied',
+            message: 'Emergency message copied. Open WhatsApp and paste it into the emergency contact chat.',
+          },
+        }));
+        toast.success('Emergency message copied. Paste it into WhatsApp.', { icon: '📋' });
+      } else {
+        toast.error('Failed to copy emergency message to clipboard.');
+      }
+    } catch {
+      toast.error('Failed to copy emergency message.');
+    }
+  };
+
+  const handleConfirmResolveEmergency = async () => {
+    if (!activeEmergency) return;
+    setResolvingEmergency(true);
+    const toastId = toast.loading('Resolving emergency session...');
+    try {
+      await womenSafetyService.resolveEmergencyEvent(activeEmergency.id);
+      setActiveEmergency(null);
+      setTimeline([]);
+      setWhatsappAlerts(null);
+      setWhatsappStatus({});
+      setIsResolveModalOpen(false);
+      toast.success('Emergency session resolved.', { id: toastId, icon: '✅' });
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to resolve emergency session.';
+      toast.error(msg, { id: toastId });
+    } finally {
+      setResolvingEmergency(false);
     }
   };
 
@@ -462,10 +437,10 @@ export default function WomenSafety() {
               <h1 className="text-2xl font-black tracking-tight text-surface-100 flex items-center gap-2">
                 WOMEN SAFETY
                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30">
-                  WS-3B WhatsApp Flow
+                  WS-1 Emergency Protection
                 </span>
               </h1>
-              <p className="text-xs text-surface-400 font-medium">Emergency Protection Profile, Trusted Contacts, SOS & WhatsApp Alert Flow</p>
+              <p className="text-xs text-surface-400 font-medium">Emergency Protection Profile, Trusted Contacts & Authenticated Real GPS SOS</p>
             </div>
           </div>
         </div>
@@ -511,142 +486,423 @@ export default function WomenSafety() {
         </div>
       </div>
 
-      {/* ── WS-2: ACTIVE EMERGENCY BANNER OR SOS TRIGGER CARD ──────────────── */}
+      {/* ── WS-1: ACTIVE EMERGENCY BANNER OR SOS TRIGGER CARD ──────────────── */}
       {activeEmergency ? (
-        <div className="p-6 rounded-2xl bg-gradient-to-r from-rose-950/90 via-red-900/40 to-surface-900 border-2 border-rose-500/80 shadow-2xl shadow-rose-950/60 space-y-4">
+        <div className="p-6 rounded-2xl bg-gradient-to-r from-rose-950/95 via-red-950/80 to-surface-900 border-2 border-rose-500 shadow-2xl shadow-rose-950/60 space-y-5 animate-fadeIn">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center justify-center flex-shrink-0 shadow-lg">
-                <span className="w-4 h-4 rounded-full bg-rose-500 animate-ping" />
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center justify-center flex-shrink-0 shadow-lg text-2xl relative">
+                <span className="w-4 h-4 rounded-full bg-rose-500 animate-ping absolute" />
+                <span className="relative">🔴</span>
               </div>
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                  <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
                     🔴 EMERGENCY ACTIVE
                   </h2>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded bg-rose-500 text-white uppercase tracking-wider">
-                    {activeEmergency.status}
+                  <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-500 text-white uppercase tracking-wider shadow-sm">
+                    {activeEmergency.status || 'ACTIVE'}
                   </span>
                 </div>
-                <p className="text-xs text-rose-200 font-medium">
-                  Your emergency session is active. Location coordinates have been authoritatively recorded on the server.
+                <p className="text-xs text-rose-200 font-semibold">
+                  Emergency session activated successfully.
                 </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-bold">
+                    <span>📍</span> Current location captured ✓
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-bold">
+                    <span>✓</span> Emergency event registered
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-bold">
+                    <span>💬</span> Alert message prepared ✓
+                  </span>
+                </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setIsCancelModalOpen(true)}
-              className="btn-primary !bg-rose-600 hover:!bg-rose-500 text-xs !py-2.5 !px-5 font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-900/40 flex-shrink-0"
-            >
-              <HiStop className="w-4 h-4" />
-              <span>CANCEL EMERGENCY</span>
-            </button>
+            <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+              {/* WS-1 Step 8: View Current Location Google Maps Link */}
+              {activeEmergency.latitude != null && activeEmergency.longitude != null && (
+                <a
+                  href={`https://www.google.com/maps?q=${activeEmergency.latitude},${activeEmergency.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:scale-98 text-white text-xs font-bold transition-all shadow-lg shadow-cyan-950/40 cursor-pointer flex-shrink-0"
+                  id="view-current-location-btn"
+                >
+                  <span>📍</span>
+                  <span>View Current Location</span>
+                </a>
+              )}
+
+              <button
+                onClick={() => setIsResolveModalOpen(true)}
+                className="btn-primary !bg-emerald-600 hover:!bg-emerald-500 text-xs !py-2.5 !px-5 font-bold flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 flex-shrink-0 cursor-pointer"
+                id="resolve-emergency-btn"
+              >
+                <span>✅</span>
+                <span>RESOLVE EMERGENCY</span>
+              </button>
+
+              <button
+                onClick={() => setIsCancelModalOpen(true)}
+                className="btn-primary !bg-rose-700 hover:!bg-rose-600 text-xs !py-2.5 !px-5 font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-900/40 flex-shrink-0 cursor-pointer"
+              >
+                <HiStop className="w-4 h-4" />
+                <span>CANCEL EMERGENCY</span>
+              </button>
+            </div>
           </div>
 
+          {/* Quick Emergency Actions Bar (WS-3 Requirement 7) */}
+          <div className="p-4 rounded-xl bg-surface-950/90 border border-surface-800 space-y-2">
+            <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider block">
+              QUICK EMERGENCY ACTIONS
+            </span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <button
+                onClick={() => {
+                  const phone = overview?.emergency_profile?.emergency_mobile || contacts[0]?.mobile_number;
+                  const name = overview?.emergency_profile?.emergency_mobile ? 'Primary Contact' : (contacts[0]?.contact_name || 'Emergency Contact');
+                  if (phone) {
+                    handleInitiateCall(phone, name, 'PRIMARY');
+                  } else {
+                    toast.error('No emergency contact mobile number configured.');
+                  }
+                }}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-rose-950/70 hover:bg-rose-900/80 border border-rose-500/40 text-rose-200 text-xs font-bold transition-all active:scale-98 cursor-pointer shadow-md"
+                id="quick-call-contact-btn"
+              >
+                <span>📞</span>
+                <span className="truncate">CALL CONTACT</span>
+              </button>
+
+              <button
+                onClick={() => handleInitiateCall('112', 'National Emergency Police', 'POLICE')}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-red-950/80 hover:bg-red-900 border border-red-500/60 text-white text-xs font-black transition-all active:scale-98 cursor-pointer shadow-md"
+                id="quick-call-112-btn"
+              >
+                <span>🚨</span>
+                <span className="truncate">CALL 112</span>
+              </button>
+
+              {activeEmergency.latitude != null && activeEmergency.longitude != null ? (
+                <a
+                  href={`https://www.google.com/maps?q=${activeEmergency.latitude},${activeEmergency.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 p-3 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 text-xs font-bold transition-all active:scale-98 cursor-pointer shadow-md text-center"
+                >
+                  <span>📍</span>
+                  <span className="truncate">VIEW LOCATION</span>
+                </a>
+              ) : (
+                <button
+                  disabled
+                  className="flex items-center justify-center gap-2 p-3 rounded-xl bg-surface-900 text-surface-500 border border-surface-800 text-xs font-bold cursor-not-allowed opacity-50"
+                >
+                  <span>📍</span>
+                  <span className="truncate">VIEW LOCATION</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  const phone = overview?.emergency_profile?.emergency_mobile || contacts[0]?.whatsapp_number || contacts[0]?.mobile_number;
+                  const key = overview?.emergency_profile?.emergency_mobile ? 'primary' : `contact_${contacts[0]?.id}`;
+                  const name = overview?.emergency_profile?.emergency_mobile ? 'Primary Contact' : contacts[0]?.contact_name;
+                  if (phone) {
+                    handleTriggerWhatsApp(phone, key, name);
+                  } else {
+                    toast.error('No valid WhatsApp mobile number configured.');
+                  }
+                }}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-500/40 text-emerald-200 text-xs font-bold transition-all active:scale-98 cursor-pointer shadow-md"
+                id="quick-open-whatsapp-btn"
+              >
+                <span>💬</span>
+                <span className="truncate">OPEN WHATSAPP</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Emergency Details Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-rose-500/30 text-xs">
-            <div className="p-3 rounded-xl bg-surface-950/60 border border-rose-500/30">
-              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider">Captured Location</span>
-              <p className="font-mono font-bold text-rose-300 mt-0.5">
-                {activeEmergency.latitude?.toFixed(6)}, {activeEmergency.longitude?.toFixed(6)}
+            <div className="p-3.5 rounded-xl bg-surface-950/70 border border-rose-500/30">
+              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider block">Current Location</span>
+              <p className="font-mono font-bold text-rose-300 mt-1 text-sm">
+                {Number(activeEmergency.latitude).toFixed(6)}, {Number(activeEmergency.longitude).toFixed(6)}
               </p>
             </div>
-            <div className="p-3 rounded-xl bg-surface-950/60 border border-rose-500/30">
-              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider">GPS Accuracy</span>
-              <p className="font-mono font-bold text-surface-200 mt-0.5">
-                {activeEmergency.location_accuracy_m != null ? `±${activeEmergency.location_accuracy_m} m` : 'Standard GPS'}
+            <div className="p-3.5 rounded-xl bg-surface-950/70 border border-rose-500/30">
+              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider block">Accuracy</span>
+              <p className="font-mono font-bold text-surface-200 mt-1 text-sm">
+                {(activeEmergency.accuracy_m ?? activeEmergency.location_accuracy_m) != null
+                  ? `±${Math.round(activeEmergency.accuracy_m ?? activeEmergency.location_accuracy_m)} m`
+                  : 'Standard GPS'}
               </p>
             </div>
-            <div className="p-3 rounded-xl bg-surface-950/60 border border-rose-500/30">
-              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider">Triggered At</span>
-              <p className="font-bold text-surface-200 mt-0.5">
-                {activeEmergency.triggered_at
-                  ? new Date(activeEmergency.triggered_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                  : 'Just now'}
+            <div className="p-3.5 rounded-xl bg-surface-950/70 border border-rose-500/30">
+              <span className="text-[10px] font-bold text-surface-400 uppercase tracking-wider block">Activated</span>
+              <p className="font-bold text-surface-200 mt-1 text-sm">
+                {formatActivationTime(activeEmergency.triggered_at)}
               </p>
             </div>
           </div>
 
-          {/* WS-3B: WhatsApp Alert Section */}
-          <div className="pt-4 border-t border-rose-500/30 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-base">📱</span>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">WhatsApp Alerts — Trusted Contacts</h3>
+          {/* ── WS-2 & WS-3: EMERGENCY CONTACTS & WHATSAPP ALERTS SECTION ──────────────── */}
+          <div className="p-5 rounded-2xl bg-surface-950/80 border border-emerald-500/40 space-y-4 pt-4 border-t">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-surface-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">💬</span>
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                    EMERGENCY CONTACTS & WHATSAPP ALERTS
+                  </h3>
+                  <p className="text-[11px] text-surface-400">
+                    Send your emergency location & call your primary + trusted contacts.
+                  </p>
+                </div>
               </div>
-              <span className="text-[10px] font-semibold text-rose-300 bg-rose-950/60 px-2 py-0.5 rounded border border-rose-500/30">
-                Manual-Send Flow
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+                Option A: Direct Deep-Link
               </span>
             </div>
 
-            {loadingWhatsappAlerts ? (
-              <div className="flex items-center gap-2 text-xs text-surface-400 py-2">
-                <div className="w-4 h-4 border-2 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
-                <span>Loading WhatsApp alert links...</span>
+            <div className="space-y-3">
+              {/* Primary Emergency Contact */}
+              <div className="p-4 rounded-xl bg-surface-900/90 border border-surface-700/80 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30 uppercase tracking-wider">
+                      Primary Emergency Contact
+                    </span>
+                    {hasMobile ? (
+                      <p className="text-xs font-mono font-bold text-surface-100 pt-1">
+                        +91 {overview.emergency_profile.emergency_mobile}
+                      </p>
+                    ) : (
+                      <p className="text-xs font-semibold text-rose-400 pt-1">
+                        No emergency WhatsApp contact is configured.
+                      </p>
+                    )}
+                  </div>
+
+                  {hasMobile && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleTriggerWhatsApp(overview.emergency_profile.emergency_mobile, 'primary', 'Primary Contact')}
+                        className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                        id="send-primary-whatsapp-btn"
+                      >
+                        <span>📱</span>
+                        <span>{whatsappStatus['primary']?.status === 'opened' ? 'WhatsApp Opened' : 'OPEN WHATSAPP'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleInitiateCall(overview.emergency_profile.emergency_mobile, 'Primary Contact', 'PRIMARY')}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-98 text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                        id="call-primary-btn"
+                      >
+                        <HiPhone className="w-3.5 h-3.5" />
+                        <span>CALL</span>
+                      </button>
+
+                      {whatsappStatus['primary']?.status === 'opened' && (
+                        <button
+                          onClick={() => handleConfirmAlertSent('Primary Contact', 'primary', overview.emergency_profile.emergency_mobile)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:scale-98 text-white text-xs font-black transition-all shadow-md cursor-pointer animate-pulse"
+                          id="confirm-sent-primary-btn"
+                        >
+                          <span>✓</span>
+                          <span>I SENT THE ALERT</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {whatsappStatus['primary'] && (
+                  <div className={`p-2.5 rounded-lg text-xs font-medium flex items-center gap-2 ${
+                    whatsappStatus['primary'].status === 'confirmed'
+                      ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/50'
+                      : whatsappStatus['primary'].status === 'opened'
+                      ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                      : whatsappStatus['primary'].status === 'copied'
+                      ? 'bg-cyan-950/60 text-cyan-300 border border-cyan-500/30'
+                      : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    <span>{whatsappStatus['primary'].status === 'confirmed' ? '✅' : whatsappStatus['primary'].status === 'opened' ? '✓' : '📋'}</span>
+                    <span>{whatsappStatus['primary'].message}</span>
+                  </div>
+                )}
               </div>
-            ) : whatsappAlerts && whatsappAlerts.alerts && whatsappAlerts.alerts.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {whatsappAlerts.alerts.map((alert) => {
-                  const currentStatus = whatsappStatus[alert.contact_id];
+
+              {/* Trusted Contacts */}
+              {contacts.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <span className="text-[11px] font-bold text-surface-400 uppercase tracking-wider block">
+                    Trusted Contacts ({contacts.length})
+                  </span>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {contacts.map((contact) => {
+                      const cKey = `contact_${contact.id}`;
+                      const validNum = contact.whatsapp_number || contact.mobile_number;
+                      const hasValid = Boolean(validNum && normalizePhoneNumber(validNum));
+                      const statusObj = whatsappStatus[cKey];
+
+                      return (
+                        <div
+                          key={contact.id}
+                          className="p-3.5 rounded-xl bg-surface-900/80 border border-surface-700/70 space-y-2.5"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-surface-200">👤 {contact.contact_name}</span>
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                                  {contact.relationship}
+                                </span>
+                              </div>
+                              <p className="text-xs font-mono text-surface-300">
+                                {hasValid ? `+91 ${validNum}` : <span className="text-amber-400 font-sans">WhatsApp unavailable — no valid mobile number configured.</span>}
+                              </p>
+                            </div>
+
+                            {hasValid && (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={() => handleTriggerWhatsApp(validNum, cKey, contact.contact_name)}
+                                  className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+                                  id={`send-whatsapp-contact-${contact.id}`}
+                                >
+                                  <span>📱</span>
+                                  <span>{statusObj?.status === 'opened' ? 'WhatsApp Opened' : 'OPEN WHATSAPP'}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => handleInitiateCall(validNum, contact.contact_name, 'TRUSTED')}
+                                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-98 text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+                                  id={`call-contact-${contact.id}`}
+                                >
+                                  <HiPhone className="w-3.5 h-3.5" />
+                                  <span>CALL</span>
+                                </button>
+
+                                {statusObj?.status === 'opened' && (
+                                  <button
+                                    onClick={() => handleConfirmAlertSent(contact.contact_name, cKey, validNum)}
+                                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:scale-98 text-white text-xs font-black transition-all shadow-sm cursor-pointer animate-pulse"
+                                    id={`confirm-sent-contact-${contact.id}`}
+                                  >
+                                    <span>✓</span>
+                                    <span>I SENT THE ALERT</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {statusObj && (
+                            <div className={`p-2 rounded-lg text-xs font-medium flex items-center gap-2 ${
+                              statusObj.status === 'confirmed'
+                                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/50'
+                                : statusObj.status === 'opened'
+                                ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                                : statusObj.status === 'copied'
+                                ? 'bg-cyan-950/60 text-cyan-300 border border-cyan-500/30'
+                                : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                            }`}>
+                              <span>{statusObj.status === 'confirmed' ? '✅' : statusObj.status === 'opened' ? '✓' : '📋'}</span>
+                              <span>{statusObj.message}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Instruction Notice */}
+            <div className="p-3 rounded-xl bg-surface-950/60 border border-surface-800 text-[11px] text-surface-400 space-y-1">
+              <p className="font-bold text-surface-200">📌 IMPORTANT NOTICE</p>
+              <p>
+                WhatsApp will open with the emergency message prepared. Press <span className="font-bold text-white">Send</span> inside WhatsApp to deliver the alert. Tap <span className="font-bold text-cyan-300">I SENT THE ALERT</span> after sending to confirm. NAVISCAPE never falsely claims delivery without your explicit confirmation.
+              </p>
+            </div>
+          </div>
+
+          {/* ── WS-3: EMERGENCY TIMELINE UI SECTION ──────────────── */}
+          <div className="p-5 rounded-2xl bg-surface-950/80 border border-surface-800 space-y-4 pt-4 border-t">
+            <div className="flex items-center justify-between border-b border-surface-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">📜</span>
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                    EMERGENCY TIMELINE & AUDIT TRAIL
+                  </h3>
+                  <p className="text-[11px] text-surface-400">
+                    Real-time chronological log of emergency actions and status transitions.
+                  </p>
+                </div>
+              </div>
+              {loadingTimeline && (
+                <div className="w-4 h-4 border-2 border-pink-500/30 border-t-pink-500 rounded-full animate-spin" />
+              )}
+            </div>
+
+            {timeline.length === 0 ? (
+              <p className="text-xs text-surface-500 italic p-4 text-center">No timeline actions logged yet.</p>
+            ) : (
+              <div className="space-y-3 relative pl-4 border-l-2 border-surface-800 ml-2">
+                {timeline.map((item, idx) => {
+                  let icon = '📍';
+                  let colorClass = 'text-surface-200';
+
+                  if (item.action_type === 'SOS_ACTIVATED') {
+                    icon = '🔴';
+                    colorClass = 'text-rose-400 font-bold';
+                  } else if (item.action_type === 'GPS_CAPTURED') {
+                    icon = '📍';
+                    colorClass = 'text-cyan-400';
+                  } else if (item.action_type === 'EMERGENCY_REGISTERED') {
+                    icon = '✓';
+                    colorClass = 'text-emerald-400';
+                  } else if (item.action_type === 'WHATSAPP_OPENED') {
+                    icon = '📱';
+                    colorClass = 'text-emerald-300';
+                  } else if (item.action_type === 'ALERT_SENT_CONFIRMED') {
+                    icon = '✅';
+                    colorClass = 'text-emerald-400 font-bold';
+                  } else if (item.action_type === 'EMERGENCY_CONTACT_CALLED' || item.action_type === 'POLICE_CALLED') {
+                    icon = '📞';
+                    colorClass = 'text-amber-300 font-bold';
+                  } else if (item.action_type === 'EMERGENCY_CANCELLED') {
+                    icon = '🛑';
+                    colorClass = 'text-rose-400';
+                  } else if (item.action_type === 'EMERGENCY_RESOLVED') {
+                    icon = '✅';
+                    colorClass = 'text-emerald-400 font-black';
+                  }
+
+                  const formattedTime = formatActivationTime(item.created_at);
 
                   return (
-                    <div
-                      key={alert.contact_id}
-                      className="p-3.5 rounded-xl bg-surface-950/70 border border-rose-500/30 space-y-2.5 flex flex-col justify-between"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-bold text-surface-100">{alert.contact_name}</p>
-                          <span className="text-[10px] font-semibold text-pink-300 bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20">
-                            {alert.relationship}
-                          </span>
-                        </div>
-
-                        {alert.whatsapp_available && alert.whatsapp_number && (
-                          <p className="text-[11px] font-mono font-medium text-emerald-400 flex items-center gap-1">
-                            <span>WA:</span>
-                            <span>+91 {alert.whatsapp_number}</span>
-                          </p>
-                        )}
+                    <div key={item.id || idx} className="relative group">
+                      <span className="absolute -left-[23px] top-1 w-3.5 h-3.5 rounded-full bg-surface-900 border-2 border-pink-500 text-[10px] flex items-center justify-center">
+                        {icon}
+                      </span>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                        <span className={`${colorClass} leading-tight`}>{item.description}</span>
+                        <span className="text-[10px] font-mono text-surface-500 flex-shrink-0">{formattedTime}</span>
                       </div>
-
-                      {alert.whatsapp_available ? (
-                        <div className="space-y-2 pt-1 border-t border-surface-800/60">
-                          <button
-                            type="button"
-                            onClick={() => handleSendWhatsAppAlert(alert)}
-                            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold transition-all shadow-lg shadow-emerald-950/50 cursor-pointer"
-                          >
-                            <span>📲</span>
-                            <span>Send WhatsApp Alert</span>
-                          </button>
-
-                          {currentStatus && currentStatus.status === 'opened' && (
-                            <div className="p-2 rounded-lg bg-amber-950/40 border border-amber-500/30 text-[10px] text-amber-300 font-semibold text-center leading-tight">
-                              {currentStatus.message}
-                            </div>
-                          )}
-
-                          {currentStatus && currentStatus.status === 'error' && (
-                            <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[10px] text-rose-300 font-semibold text-center leading-tight">
-                              {currentStatus.message}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="pt-1 border-t border-surface-800/60">
-                          <p className="text-[10px] text-surface-500 italic">
-                            {alert.reason || 'WhatsApp alert unavailable for this contact.'}
-                          </p>
-                        </div>
-                      )}
                     </div>
                   );
                 })}
               </div>
-            ) : (
-              <p className="text-xs text-surface-500 italic py-1">
-                No trusted contacts configured for WhatsApp alerts. Add a WhatsApp number and enable consent in your contact settings.
-              </p>
             )}
           </div>
         </div>
@@ -1109,8 +1365,7 @@ export default function WomenSafety() {
                 event on the server.
               </p>
               <div className="p-3 rounded-xl bg-surface-950/70 border border-surface-800 text-[11px] text-surface-400">
-                <span className="font-bold text-cyan-400">Notice:</span> In this WS-2 foundation phase, your trusted contacts
-                will <span className="underline font-bold">NOT</span> receive SMS or email alerts yet.
+                <span className="font-bold text-rose-400">Notice:</span> Browser location permission is required. NAVISCAPE will obtain your live device coordinates via GPS.
               </div>
             </div>
 
@@ -1118,16 +1373,26 @@ export default function WomenSafety() {
               <button
                 type="button"
                 onClick={() => setIsConfirmSosModalOpen(false)}
-                className="btn-secondary text-xs !py-2.5 !px-5 font-bold"
+                disabled={activatingSos}
+                className="btn-secondary text-xs !py-2.5 !px-5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 CANCEL
               </button>
               <button
                 type="button"
                 onClick={handleConfirmSOS}
-                className="btn-primary !bg-rose-600 hover:!bg-rose-500 text-xs !py-2.5 !px-6 font-black tracking-wider shadow-lg shadow-rose-950/50 flex items-center gap-2"
+                disabled={activatingSos}
+                className="btn-primary !bg-rose-600 hover:!bg-rose-500 text-xs !py-2.5 !px-6 font-black tracking-wider shadow-lg shadow-rose-950/50 flex items-center gap-2 disabled:opacity-75 disabled:cursor-not-allowed"
+                id="confirm-emergency-btn"
               >
-                <span>CONFIRM EMERGENCY</span>
+                {activatingSos ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>{sosPhaseText || 'Getting your current location...'}</span>
+                  </>
+                ) : (
+                  <span>CONFIRM EMERGENCY</span>
+                )}
               </button>
             </div>
           </div>
@@ -1169,6 +1434,53 @@ export default function WomenSafety() {
                   </>
                 ) : (
                   <span>Cancel Emergency</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── WS-3 MODAL: RESOLVE ACTIVE EMERGENCY ────────────────────────────── */}
+      {isResolveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="glass-card w-full max-w-md p-6 space-y-4 border border-emerald-500/40 shadow-2xl bg-surface-900 text-left">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto text-2xl">
+              ✅
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-base font-bold text-white">Resolve Emergency?</h3>
+              <p className="text-xs text-surface-400">
+                Are you sure the emergency has been resolved?
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-surface-950/70 border border-surface-800 text-[11px] text-surface-400 text-center">
+              This will change the emergency status to <span className="font-bold text-emerald-300">RESOLVED</span> and log the resolution in your audit history.
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsResolveModalOpen(false)}
+                className="btn-secondary text-xs !py-2.5 !px-5 font-bold"
+              >
+                Keep Active
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResolveEmergency}
+                disabled={resolvingEmergency}
+                className="btn-primary !bg-emerald-600 hover:!bg-emerald-500 text-xs !py-2.5 !px-6 font-bold flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/50"
+                id="confirm-resolve-btn"
+              >
+                {resolvingEmergency ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Resolving...</span>
+                  </>
+                ) : (
+                  <span>YES, RESOLVE EMERGENCY</span>
                 )}
               </button>
             </div>

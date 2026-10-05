@@ -1,5 +1,5 @@
 """
-NAVISCAPE Women Safety — WS-3A WhatsApp Emergency Message Service
+NAVISCAPE Women Safety — WS-2 WhatsApp Emergency Alert Message Service
 
 Read-only helper service for generating emergency WhatsApp messages
 and click-to-chat URLs. This service:
@@ -13,66 +13,68 @@ All coordinates MUST come from authenticated EmergencyEvent records.
 """
 
 from urllib.parse import quote
+import re
 
 
 def normalize_whatsapp_number(number: str) -> str:
     """
-    Normalize an Indian mobile number to the international format required
-    by wa.me URLs: 91XXXXXXXXXX (country code + 10 digits, no '+' prefix).
-
-    Accepts formats: 9876543210, +919876543210, 09876543210
-    Returns: 919876543210
+    Normalize an Indian mobile number to international format required by wa.me URLs: 91XXXXXXXXXX.
+    Accepts: 9739988032, +91 9739988032, +919739988032, 91 9739988032, 09739988032.
+    Returns: 919739988032 (digits only, no '+' prefix, spaces, or dashes).
     """
     if not number:
         raise ValueError("WhatsApp number cannot be empty.")
 
-    import re
-    cleaned = re.sub(r"[\s\-]", "", str(number).strip())
+    digits = re.sub(r"\D", "", str(number).strip())
 
-    # Remove +91 or 0 prefix to get 10-digit number
-    if cleaned.startswith("+91"):
-        cleaned = cleaned[3:]
-    elif cleaned.startswith("91") and len(cleaned) == 12:
-        cleaned = cleaned[2:]
-    elif cleaned.startswith("0") and len(cleaned) == 11:
-        cleaned = cleaned[1:]
-
-    if len(cleaned) != 10 or not cleaned[0] in "6789":
-        raise ValueError(f"Invalid Indian mobile number for WhatsApp: {number}")
-
-    # wa.me format: country code + number, no '+'
-    return f"91{cleaned}"
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
+        return digits
+    elif len(digits) == 11 and digits.startswith("0") and digits[1] in "6789":
+        return f"91{digits[1:]}"
+    elif len(digits) == 10 and digits[0] in "6789":
+        return f"91{digits}"
+    elif len(digits) >= 10:
+        return digits
+    else:
+        raise ValueError(f"Invalid phone number for WhatsApp: {number}")
 
 
 def generate_emergency_message(
-    user_name: str,
-    latitude: float,
-    longitude: float,
-    triggered_at: str,
+    user_name: str = "NAVISCAPE User",
+    latitude: float = 0.0,
+    longitude: float = 0.0,
+    accuracy_m: float | None = None,
+    triggered_at: str | None = None,
 ) -> str:
     """
     Generate the emergency alert message containing:
-    - User name
+    - SOS alert notice
     - Google Maps URL from real EmergencyEvent GPS coordinates
+    - Accuracy indicator (if available)
     - Trigger timestamp
+    - Contact request
 
     The latitude/longitude MUST come from the authenticated EmergencyEvent.
     Never use preset, destination, police station, hospital, or fake coordinates.
     """
     maps_url = f"https://www.google.com/maps?q={latitude},{longitude}"
 
+    accuracy_str = f"\n📌 GPS Accuracy: ±{round(accuracy_m)} m\n" if accuracy_m is not None else ""
+    time_str = f"\n🕐 Time:\n{triggered_at}\n" if triggered_at else ""
+
     message = (
         f"🚨 NAVISCAPE EMERGENCY ALERT\n"
         f"\n"
-        f"{user_name} has activated an emergency alert.\n"
+        f"An emergency SOS has been activated.\n"
         f"\n"
-        f"📍 Current location:\n"
+        f"📍 Current Location:\n"
         f"{maps_url}\n"
+        f"{accuracy_str}"
+        f"{time_str}"
         f"\n"
-        f"🕐 Time:\n"
-        f"{triggered_at}\n"
+        f"⚠️ Please contact me immediately.\n"
         f"\n"
-        f"Please contact them immediately."
+        f"— NAVISCAPE Emergency Safety System"
     )
     return message
 

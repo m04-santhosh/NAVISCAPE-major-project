@@ -19,6 +19,7 @@ from .police_station import PoliceStation
 from .hospital import Hospital
 from .emergency_profile import EmergencyProfile, TrustedContact
 from .emergency_event import EmergencyEvent
+from .emergency_action import EmergencyAction
 from .otp import OTPRecord, OTPPurpose
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "EmergencyProfile",
     "TrustedContact",
     "EmergencyEvent",
+    "EmergencyAction",
     "OTPRecord",
     "OTPPurpose",
 ]

@@ -30,6 +30,14 @@ class EmergencyEvent(Base):
     # Relationships
     user = relationship("User", back_populates="emergency_events")
 
+    @property
+    def accuracy_m(self):
+        return self.location_accuracy_m
+
+    @accuracy_m.setter
+    def accuracy_m(self, value):
+        self.location_accuracy_m = value
+
     def __repr__(self):
         return (
             f"<EmergencyEvent(id={self.id}, user_id={self.user_id}, "

@@ -1,6 +1,9 @@
 """
 Predictive Route Risk Pydantic Schemas
-Defines request and response validation contracts for the Predictive Route Risk Engine (Phase 3A & Phase 3B).
+Defines request and response validation contracts for:
+- Phase 3A: Predictive Route Risk Engine
+- Phase 3B: Predictive Route Comparison
+- Phase 3C: Live Predictive Route Risk Engine
 """
 
 from typing import List, Optional
@@ -119,3 +122,66 @@ class RouteComparisonResponse(BaseModel):
     trade_off_summary: Optional[RouteTradeOffSummary] = Field(default=None)
     alternatives_available: bool = Field(..., description="True if 2 or more real route alternatives were compared")
     model_used: str = Field(default="xgboost_severity_classifier")
+
+
+# ── Phase 3C: Live Predictive Route Risk Schemas ─────────────────────────────
+
+class LiveUpcomingRisk(BaseModel):
+    available: bool = Field(..., description="True if a meaningful upcoming risk hotspot is detected ahead")
+    distance_m: Optional[int] = Field(default=None, description="Distance in meters from current GPS position")
+    latitude: Optional[float] = Field(default=None, description="Hotspot latitude")
+    longitude: Optional[float] = Field(default=None, description="Hotspot longitude")
+    severity: Optional[str] = Field(default=None, description="Prominent severity classification")
+    risk_score: Optional[float] = Field(default=None, description="Risk intensity score")
+    description: Optional[str] = Field(default=None, description="Contextual description")
+
+
+class LiveTrafficStatus(BaseModel):
+    level: str = Field(..., description="Traffic congestion risk level: LOW, MODERATE, HIGH, or UNKNOWN")
+    traffic_score: Optional[float] = Field(default=None, description="0-100 traffic speed index")
+    traffic_source: Optional[str] = Field(default="unavailable", description="Traffic data provider source")
+    expected_delay_minutes: Optional[float] = Field(default=None, description="Expected congestion delay in minutes")
+
+
+class LiveHazardsStatus(BaseModel):
+    active_count: int = Field(default=0, ge=0, description="Number of active user-reported hazards along remaining route")
+    nearest_distance_m: Optional[int] = Field(default=None, description="Distance in meters to closest active hazard ahead")
+
+
+class LiveRouteRiskRequest(BaseModel):
+    current_lat: float = Field(..., ge=-90.0, le=90.0, description="Current GPS latitude (-90 to 90)")
+    current_lng: float = Field(..., ge=-180.0, le=180.0, description="Current GPS longitude (-180 to 180)")
+    waypoints: List[List[float]] = Field(
+        ...,
+        description="Remaining route waypoints (must contain at least 2 valid coordinates)"
+    )
+    remaining_distance_km: float = Field(default=0.0, ge=0.0, description="Remaining route distance in km")
+    remaining_duration_min: float = Field(default=0.0, ge=0.0, description="Remaining route duration in minutes")
+    weather: Optional[str] = Field(default="Clear", description="Weather context")
+    road_condition: Optional[str] = Field(default="Not Applicable", description="Road condition context")
+    surface_condition: Optional[str] = Field(default="Not Applicable", description="Surface condition context")
+
+    @field_validator("waypoints")
+    @classmethod
+    def validate_waypoints(cls, v: List[List[float]]) -> List[List[float]]:
+        if not v or len(v) < 2:
+            raise ValueError("At least 2 route waypoints are required")
+        for pt in v:
+            if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                raise ValueError("Each waypoint entry must be a [latitude, longitude] pair")
+            lat, lng = float(pt[0]), float(pt[1])
+            if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+                raise ValueError(f"Waypoint coordinate out of valid range: [{lat}, {lng}]")
+        return v
+
+
+class LiveRouteRiskResponse(BaseModel):
+    safety_score: float = Field(..., ge=0.0, le=100.0, description="Predicted safety score for remaining route (0-100)")
+    risk_level: str = Field(..., description="Risk category: LOW, MODERATE, or HIGH")
+    upcoming_risk: LiveUpcomingRisk
+    traffic: LiveTrafficStatus
+    hazards: LiveHazardsStatus
+    accident_exposure: AccidentExposure
+    data_quality: str = Field(default="LIVE", description="Data completeness indicator: LIVE, PARTIAL, or UNAVAILABLE")
+    factors: List[str] = Field(default_factory=list, description="Descriptive deterministic explanation factors")
+    evaluated_at: str = Field(..., description="ISO-8601 UTC timestamp of evaluation")

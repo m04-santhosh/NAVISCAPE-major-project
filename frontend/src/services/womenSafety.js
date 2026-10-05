@@ -59,11 +59,24 @@ export const womenSafetyService = {
   },
 
   /**
+   * WS-1: Trigger Emergency SOS event with validated real GPS coordinates
+   * @param {Object} payload { latitude, longitude, accuracy_m }
+   */
+  async triggerEmergency(payload) {
+    const res = await api.post('/women-safety/emergency', payload);
+    return res.data;
+  },
+
+  /**
    * WS-2: Trigger Emergency SOS event with validated GPS coordinates
    * @param {Object} payload { latitude, longitude, location_accuracy_m }
    */
   async triggerSOS(payload) {
-    const res = await api.post('/women-safety/emergency-events', payload);
+    const res = await api.post('/women-safety/emergency', {
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      accuracy_m: payload.accuracy_m ?? payload.location_accuracy_m ?? null,
+    });
     return res.data;
   },
 
@@ -84,6 +97,46 @@ export const womenSafetyService = {
    */
   async getWhatsAppAlerts(eventId) {
     const res = await api.get(`/women-safety/emergency-events/${eventId}/whatsapp-alerts`);
+    return res.data;
+  },
+
+  /**
+   * WS-3: Record an emergency action audit trail entry
+   * @param {number} eventId
+   * @param {Object} payload { action_type, contact_type, contact_name, contact_phone, latitude, longitude, metadata }
+   */
+  async recordAction(eventId, payload) {
+    const res = await api.post(`/women-safety/emergency/${eventId}/actions`, payload);
+    return res.data;
+  },
+
+  /**
+   * WS-3: Get chronological emergency actions timeline
+   * @param {number} eventId
+   */
+  async getTimeline(eventId) {
+    const res = await api.get(`/women-safety/emergency/${eventId}/timeline`);
+    return res.data;
+  },
+
+  /**
+   * WS-3: Update emergency event status (ACTIVE, ALERTS_PREPARED, CONTACTS_NOTIFIED, CANCELLED, RESOLVED)
+   * @param {number} eventId
+   * @param {string} newStatus
+   */
+  async updateStatus(eventId, newStatus) {
+    const res = await api.patch(`/women-safety/emergency/${eventId}/status`, { status: newStatus });
+    return res.data;
+  },
+
+  /**
+   * WS-3: Mark emergency event as resolved
+   * @param {number} eventId
+   */
+  async resolveEmergencyEvent(eventId) {
+    const res = await api.post(`/women-safety/emergency/${eventId}/actions`, {
+      action_type: 'EMERGENCY_RESOLVED',
+    });
     return res.data;
   },
 };

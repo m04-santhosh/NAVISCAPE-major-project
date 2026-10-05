@@ -283,6 +283,7 @@ def init_db():
     from .models import hospital  # noqa: F401
     from .models import emergency_profile  # noqa: F401
     from .models import emergency_event  # noqa: F401
+    from .models import emergency_action  # noqa: F401
 
     # Run SQLite-specific migrations only when using SQLite
     if is_sqlite:
