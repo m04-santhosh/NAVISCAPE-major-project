@@ -452,6 +452,7 @@ export default function WomenSafety() {
   const contacts = overview?.trusted_contacts || [];
   const hasMobile = Boolean(overview?.has_emergency_mobile);
   const hasConsent = Boolean(overview?.location_sharing_consent);
+  const isProfileComplete = Boolean(overview?.is_profile_complete ?? (contacts.length >= 1 && hasMobile && hasConsent));
 
   // Compute Hold Countdown Display
   const remainingSeconds = Math.max(1, Math.ceil((3000 - (holdProgress / 100) * 3000) / 1000));
