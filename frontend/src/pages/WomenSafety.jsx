@@ -84,6 +84,34 @@ export default function WomenSafety() {
   const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
   const [resolvingEmergency, setResolvingEmergency] = useState(false);
 
+  const fetchOverview = useCallback(async (showLoader = true) => {
+    if (showLoader) setLoading(true);
+    try {
+      const data = await womenSafetyService.getOverview();
+      setOverview(data);
+      if (data.emergency_profile) {
+        setEmergencyMobile(data.emergency_profile.emergency_mobile || '');
+        setEmergencyEmail(data.emergency_profile.emergency_email || '');
+        setConsent(Boolean(data.emergency_profile.location_sharing_consent));
+      }
+      try {
+        const activeRes = await womenSafetyService.getActiveEmergencyEvent();
+        if (activeRes && activeRes.active && activeRes.emergency_event) {
+          setActiveEmergency(activeRes.emergency_event);
+        } else {
+          setActiveEmergency(null);
+        }
+      } catch {
+        setActiveEmergency(null);
+      }
+    } catch (err) {
+      console.error('Failed to load emergency profile overview:', err);
+      toast.error('Failed to load Women Safety profile overview.');
+    } finally {
+      if (showLoader) setLoading(false);
+    }
+  }, []);
+
   // Fetch timeline for active emergency session
   const fetchTimeline = useCallback(async (eventId) => {
     if (!eventId) {
@@ -105,6 +133,10 @@ export default function WomenSafety() {
       setLoadingTimeline(false);
     }
   }, []);
+
+  useEffect(() => {
+    fetchOverview(true);
+  }, [fetchOverview]);
 
   useEffect(() => {
     if (activeEmergency?.id) {
