@@ -144,6 +144,120 @@ export default function WomenSafety() {
     }
   }, [activeEmergency?.id, fetchTimeline]);
 
+  // ── WS-1 & WS-2: 3-Second SOS Press-and-Hold & Real GPS Trigger Handlers ──────
+
+  const startHold = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!isProfileComplete || activatingSos || activeEmergency) return;
+
+    setIsHolding(true);
+    setHoldProgress(0);
+    holdStartTimeRef.current = Date.now();
+
+    if (holdTimerRef.current) clearInterval(holdTimerRef.current);
+
+    holdTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - holdStartTimeRef.current;
+      const progress = Math.min(100, (elapsed / 3000) * 100);
+      setHoldProgress(progress);
+
+      if (elapsed >= 3000) {
+        clearInterval(holdTimerRef.current);
+        holdTimerRef.current = null;
+        setIsHolding(false);
+        setHoldProgress(100);
+        setIsConfirmSosModalOpen(true);
+      }
+    }, 50);
+  };
+
+  const cancelHold = () => {
+    if (holdTimerRef.current) {
+      clearInterval(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setIsHolding(false);
+    setHoldProgress(0);
+  };
+
+  const handleConfirmSOS = async () => {
+    setActivatingSos(true);
+    setSosPhaseText('Capturing real GPS location...');
+
+    if (!navigator.geolocation) {
+      toast.error('Geolocation is not supported by your browser.');
+      setActivatingSos(false);
+      setIsConfirmSosModalOpen(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          const accuracy = position.coords.accuracy;
+
+          setSosPhaseText('Registering emergency session...');
+
+          const emergencyRes = await womenSafetyService.triggerSOS({
+            latitude: lat,
+            longitude: lng,
+            accuracy_m: accuracy,
+          });
+
+          setActiveEmergency(emergencyRes);
+          setIsConfirmSosModalOpen(false);
+          toast.success('🚨 EMERGENCY SOS ACTIVATED! Location captured.', { icon: '🚨' });
+
+          fetchTimeline(emergencyRes.id);
+        } catch (err) {
+          const msg = err.response?.data?.detail || 'Failed to trigger emergency SOS.';
+          toast.error(msg);
+        } finally {
+          setActivatingSos(false);
+          setSosPhaseText('');
+        }
+      },
+      (error) => {
+        let errStr = 'Unable to retrieve location.';
+        if (error.code === error.PERMISSION_DENIED) {
+          errStr = 'Location permission denied. Please allow location access to trigger SOS.';
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          errStr = 'Location information is unavailable.';
+        } else if (error.code === error.TIMEOUT) {
+          errStr = 'Location request timed out.';
+        }
+        toast.error(errStr);
+        setActivatingSos(false);
+        setSosPhaseText('');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+  };
+
+  const handleConfirmCancelEmergency = async () => {
+    if (!activeEmergency) return;
+    setCancellingEmergency(true);
+    try {
+      await womenSafetyService.cancelEmergencyEvent(activeEmergency.id);
+      setActiveEmergency(null);
+      setTimeline([]);
+      setWhatsappStatus({});
+      setIsCancelModalOpen(false);
+      toast.success('Emergency session cancelled.', { icon: '🛑' });
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to cancel emergency session.';
+      toast.error(msg);
+    } finally {
+      setCancellingEmergency(false);
+    }
+  };
+
   // ── WS-2 & WS-3: Real Device WhatsApp Alert, Call & Action Handlers ──────
 
   const handleTriggerWhatsApp = async (phone, contactKey, contactName) => {
