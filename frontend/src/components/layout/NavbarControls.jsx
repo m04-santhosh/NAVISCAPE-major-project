@@ -38,7 +38,7 @@ export default function NavbarControls({
   }, []);
 
   return (
-    <div className="fixed top-4 right-4 z-[1000] flex items-center gap-2 pointer-events-auto">
+    <div className="fixed top-16 right-3 md:top-4 md:right-4 z-[1000] flex items-center gap-1.5 md:gap-2 pointer-events-auto">
       {/* Hospitals Layer Toggle Button */}
       <button
         onClick={onToggleHospitals}

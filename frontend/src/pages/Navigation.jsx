@@ -296,9 +296,10 @@ export default function Navigation() {
   const [navInstruction, setNavInstruction] = useState({ icon: HiArrowUp, text: 'Head straight' });
   const [travelledPath, setTravelledPath] = useState([]);
   const watchIdRef = useRef(null);
+  const lastGpsPosRef = useRef(null);
+  const lastHeadingRef = useRef(0);
   const warnedHotspotsRef = useRef(new Set());
   const warnedHazardsRef = useRef(new Set());
-  const simIntervalRef = useRef(null);
   const [activeHotspotWarning, setActiveHotspotWarning] = useState(null);
 
   // Web Audio API context reference for accident warning chime
@@ -728,33 +729,51 @@ export default function Navigation() {
     setNearestHospitalLoading(true);
     setNearestHospitalError(null);
 
+    const successHandler = (pos) => {
+      const { latitude, longitude } = pos.coords;
+      const newCoords = [latitude, longitude];
+      setUserLocation(newCoords);
+      setLocState('available');
+      fetchNearestPoliceStation(latitude, longitude);
+      fetchNearestHospital(latitude, longitude);
+    };
+
+    const errorHandler = () => {
+      // Fallback to standard accuracy if high accuracy fails or times out
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          const newCoords = [latitude, longitude];
+          setUserLocation(newCoords);
+          setLocState('available');
+          fetchNearestPoliceStation(latitude, longitude);
+          fetchNearestHospital(latitude, longitude);
+        },
+        (fallbackErr) => {
+          setNearestStationLoading(false);
+          setNearestHospitalLoading(false);
+          if (fallbackErr.code === fallbackErr.PERMISSION_DENIED) {
+            setLocState('permission_denied');
+            setNearestStationError('permission_denied');
+            setNearestHospitalError('permission_denied');
+          } else if (fallbackErr.code === fallbackErr.TIMEOUT) {
+            setLocState('timeout');
+            setNearestStationError('timeout');
+            setNearestHospitalError('timeout');
+          } else {
+            setLocState('unavailable');
+            setNearestStationError('unavailable');
+            setNearestHospitalError('unavailable');
+          }
+        },
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 10000 }
+      );
+    };
+
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        const newCoords = [latitude, longitude];
-        setUserLocation(newCoords);
-        setLocState('available');
-        fetchNearestPoliceStation(latitude, longitude);
-        fetchNearestHospital(latitude, longitude);
-      },
-      (err) => {
-        setNearestStationLoading(false);
-        setNearestHospitalLoading(false);
-        if (err.code === err.PERMISSION_DENIED) {
-          setLocState('permission_denied');
-          setNearestStationError('permission_denied');
-          setNearestHospitalError('permission_denied');
-        } else if (err.code === err.TIMEOUT) {
-          setLocState('timeout');
-          setNearestStationError('timeout');
-          setNearestHospitalError('timeout');
-        } else {
-          setLocState('unavailable');
-          setNearestStationError('unavailable');
-          setNearestHospitalError('unavailable');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      successHandler,
+      errorHandler,
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   }, [fetchNearestPoliceStation, fetchNearestHospital]);
 
@@ -803,30 +822,69 @@ export default function Navigation() {
       return;
     }
     setLocState('loading');
+    const toastId = toast.loading("Fetching your live GPS location...");
+
+    const successHandler = (position) => {
+      const { latitude, longitude } = position.coords;
+      const pos = [latitude, longitude];
+      setUserLocation(pos);
+      setLocState('available');
+      setSourceCoord(pos);
+      setSource('Your Location');
+      setBounds(L.latLngBounds([pos]));
+      toast.success("Live GPS location updated!", { id: toastId });
+      fetchNearestPoliceStation(latitude, longitude);
+      fetchNearestHospital(latitude, longitude);
+
+      // Reverse geocode location for readable address
+      fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.display_name) {
+            const main = data.name || data.display_name.split(',')[0];
+            const city = data.address?.city || data.address?.town || data.address?.suburb || '';
+            const label = [main, city].filter(Boolean).join(', ') || 'Your Location';
+            setSource(label);
+          }
+        })
+        .catch(() => {});
+    };
+
+    const errorHandler = (err) => {
+      console.warn("High accuracy geolocation failed, trying standard accuracy fallback...", err);
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          const pos = [latitude, longitude];
+          setUserLocation(pos);
+          setLocState('available');
+          setSourceCoord(pos);
+          setSource('Your Location');
+          setBounds(L.latLngBounds([pos]));
+          toast.success("Live location updated (Standard Accuracy)", { id: toastId });
+          fetchNearestPoliceStation(latitude, longitude);
+          fetchNearestHospital(latitude, longitude);
+        },
+        (fallbackErr) => {
+          if (fallbackErr.code === fallbackErr.PERMISSION_DENIED) {
+            setLocState('permission_denied');
+            toast.error("Location permission denied. Please enable location access in browser.", { id: toastId });
+          } else if (fallbackErr.code === fallbackErr.TIMEOUT) {
+            setLocState('timeout');
+            toast.error("Location request timed out. Please try again.", { id: toastId });
+          } else {
+            setLocState('unavailable');
+            toast.error("Unable to retrieve GPS location. Ensure location services are enabled.", { id: toastId });
+          }
+        },
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 5000 }
+      );
+    };
+
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        const pos = [latitude, longitude];
-        setUserLocation(pos);
-        setLocState('available');
-        setSourceCoord(pos);
-        setSource('Your Location');
-        setBounds(L.latLngBounds([pos]));
-        toast.success("Location updated");
-        fetchNearestPoliceStation(latitude, longitude);
-        fetchNearestHospital(latitude, longitude);
-      },
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setLocState('permission_denied');
-        } else if (err.code === err.TIMEOUT) {
-          setLocState('timeout');
-        } else {
-          setLocState('unavailable');
-        }
-        toast.error("Could not find your location");
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      successHandler,
+      errorHandler,
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   }, [fetchNearestPoliceStation, fetchNearestHospital]);
 
@@ -981,22 +1039,29 @@ export default function Navigation() {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
-    if (simIntervalRef.current) {
-      clearInterval(simIntervalRef.current);
-      simIntervalRef.current = null;
-    }
+    lastGpsPosRef.current = null;
     setActiveHotspotWarning(null);
     toast('Navigation stopped', { icon: '🛑' });
   };
 
-  const processProximityAndLocationUpdate = useCallback((currentPos, heading = 0, speedKmh = 40, nearestIdx = 0) => {
+  const processProximityAndLocationUpdate = useCallback((currentPos, heading = 0, speedKmh = 0) => {
     setNavPosition(currentPos);
     setTravelledPath(prev => [...prev, currentPos]);
     setNavBearing(heading);
     setNavSpeed(speedKmh);
 
     if (selectedRoute?.waypoints?.length > 1) {
-      const totalWp = selectedRoute.waypoints.length;
+      const waypoints = selectedRoute.waypoints;
+      const totalWp = waypoints.length;
+
+      // Project current GPS location onto route waypoints to find nearest segment index
+      let nearestIdx = 0;
+      let minD = Infinity;
+      waypoints.forEach((p, i) => {
+        const d = haversineMeters(currentPos[0], currentPos[1], p[0], p[1]);
+        if (d < minD) { minD = d; nearestIdx = i; }
+      });
+
       const rawPct = (nearestIdx / (totalWp - 1)) * 100;
       const pct = Math.min(100, Math.max(0, rawPct));
       const baseEta = selectedRoute.eta_minutes ?? selectedRoute.duration_min ?? 0;
@@ -1009,9 +1074,9 @@ export default function Navigation() {
 
       if (nearestIdx < totalWp - 1) {
         const dir = turnDirection(
-          selectedRoute.waypoints[Math.max(0, nearestIdx - 1)],
+          waypoints[Math.max(0, nearestIdx - 1)],
           currentPos,
-          selectedRoute.waypoints[nearestIdx + 1]
+          waypoints[nearestIdx + 1]
         );
         setNavInstruction(dir);
       }
@@ -1057,6 +1122,50 @@ export default function Navigation() {
     }
   }, [selectedRoute, playAccidentWarningChime]);
 
+  const processRealGpsPosition = useCallback((position) => {
+    if (!position || !position.coords) return;
+    const { latitude, longitude, heading, speed, accuracy } = position.coords;
+    const currentPos = [latitude, longitude];
+
+    if (lastGpsPosRef.current) {
+      const distMovedMeters = haversineMeters(
+        lastGpsPosRef.current[0], lastGpsPosRef.current[1],
+        latitude, longitude
+      );
+
+      // Noise Filter: Ignore tiny GPS jitter (< 3 meters or 0.3 * accuracy) when user is stationary
+      const noiseThreshold = Math.max(3.0, (accuracy || 10) * 0.3);
+      if (distMovedMeters < noiseThreshold) {
+        // Device has not moved significantly — keep marker stationary
+        return;
+      }
+
+      // Determine Heading/Bearing:
+      // 1. Use device GPS heading if valid and non-negative
+      // 2. Otherwise compute bearing between previous GPS position and current GPS position
+      let computedHeading = lastHeadingRef.current;
+      if (heading !== null && heading !== undefined && !isNaN(heading) && heading >= 0) {
+        computedHeading = heading;
+      } else if (distMovedMeters >= 3.0) {
+        computedHeading = bearing(lastGpsPosRef.current, currentPos);
+      }
+
+      lastHeadingRef.current = computedHeading;
+      lastGpsPosRef.current = currentPos;
+
+      const speedKmh = speed && !isNaN(speed) ? Math.round(speed * 3.6) : 0;
+      processProximityAndLocationUpdate(currentPos, computedHeading, speedKmh);
+    } else {
+      // First real GPS fix
+      lastGpsPosRef.current = currentPos;
+      if (heading !== null && heading !== undefined && !isNaN(heading) && heading >= 0) {
+        lastHeadingRef.current = heading;
+      }
+      const speedKmh = speed && !isNaN(speed) ? Math.round(speed * 3.6) : 0;
+      processProximityAndLocationUpdate(currentPos, lastHeadingRef.current || 0, speedKmh);
+    }
+  }, [processProximityAndLocationUpdate]);
+
   const startNavigation = () => {
     if (!selectedRoute) { toast.error('Select a route first'); return; }
 
@@ -1066,56 +1175,51 @@ export default function Navigation() {
     // Unlock Web Audio API on user interaction
     initAudioContext();
 
-    setIsNavigating(true);
-    setTravelledPath([initialPos]);
-    setNavPosition(initialPos);
+    // Clear any previous watcher to prevent duplicate watchers
+    if (watchIdRef.current) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+
+    lastGpsPosRef.current = null;
+    lastHeadingRef.current = 0;
     warnedHotspotsRef.current.clear();
     warnedHazardsRef.current.clear();
     setActiveHotspotWarning(null);
+    setIsNavigating(true);
+    setTravelledPath([initialPos]);
+    setNavPosition(initialPos);
     saveRoute(selectedRoute);
-    toast.success('Navigation started');
 
-    const waypoints = selectedRoute.waypoints || [];
-    if (waypoints.length > 1) {
-      let stepIdx = 0;
-      const stepInterval = Math.max(1, Math.floor(waypoints.length / 30));
+    if (!("geolocation" in navigator)) {
+      toast.error("Geolocation is not supported by your browser");
+      return;
+    }
 
-      if (simIntervalRef.current) clearInterval(simIntervalRef.current);
-      simIntervalRef.current = setInterval(() => {
-        stepIdx += stepInterval;
-        if (stepIdx >= waypoints.length - 1) {
-          stepIdx = waypoints.length - 1;
-          const currentPos = waypoints[stepIdx];
-          processProximityAndLocationUpdate(currentPos, 0, 0, stepIdx);
-          clearInterval(simIntervalRef.current);
-          simIntervalRef.current = null;
-          toast.success('You have arrived!');
-          return;
+    toast('Waiting for device location...', { icon: '📍' });
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        processRealGpsPosition(position);
+      },
+      (error) => {
+        console.warn("Geolocation watch error:", error);
+        if (error.code === error.PERMISSION_DENIED) {
+          toast.error("Location access is required for live navigation.");
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          toast.error("GPS location unavailable. Waiting for signal...");
+        } else if (error.code === error.TIMEOUT) {
+          toast.error("GPS location request timed out. Retrying...");
         }
-        const prevPos = waypoints[Math.max(0, stepIdx - stepInterval)];
-        const currentPos = waypoints[stepIdx];
-        const brg = bearing(prevPos, currentPos);
-        processProximityAndLocationUpdate(currentPos, brg, 45, stepIdx);
-      }, 1000);
-    }
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000,
+      }
+    );
 
-    if ("geolocation" in navigator) {
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (position) => {
-          const { latitude, longitude, heading, speed } = position.coords;
-          const currentPos = [latitude, longitude];
-          let nearestIdx = 0;
-          let minD = Infinity;
-          waypoints.forEach((p, i) => {
-            const d = Math.sqrt(Math.pow(p[0] - latitude, 2) + Math.pow(p[1] - longitude, 2));
-            if (d < minD) { minD = d; nearestIdx = i; }
-          });
-          processProximityAndLocationUpdate(currentPos, heading || 0, Math.round((speed || 0) * 3.6), nearestIdx);
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 1000 }
-      );
-    }
+    toast.success('Navigation started');
   };
 
   const srcIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png', iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowSize: [41,41] });

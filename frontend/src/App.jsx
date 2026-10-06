@@ -72,9 +72,9 @@ function PublicOnlyRoute({ children }) {
 /** Layout wrapper for authenticated app pages (full screen canvas with sleek compact sidebar) */
 function AppLayout() {
   return (
-    <div className="min-h-screen w-full relative bg-surface-950 overflow-hidden flex">
+    <div className="min-h-screen w-full relative bg-surface-950 overflow-x-hidden flex flex-col md:flex-row">
       <Sidebar />
-      <main className="flex-1 min-h-screen w-full relative pl-16 transition-all duration-300">
+      <main className="flex-1 min-h-screen w-full relative pt-14 pb-20 md:pt-0 md:pb-0 md:pl-16 transition-all duration-300">
         <Outlet />
       </main>
     </div>

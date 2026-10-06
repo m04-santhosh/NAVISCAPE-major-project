@@ -109,7 +109,7 @@ export default function WomenSafety() {
       }
     } catch (err) {
       console.error('Failed to load emergency profile overview:', err);
-      toast.error('Failed to load Women Safety profile overview.');
+      toast.error('Failed to load Safety profile overview.');
     } finally {
       if (showLoader) setLoading(false);
     }
@@ -561,7 +561,7 @@ export default function WomenSafety() {
     return (
       <div className="min-h-screen p-6 lg:p-10 flex flex-col items-center justify-center space-y-4">
         <div className="w-12 h-12 border-4 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
-        <p className="text-sm font-semibold text-surface-400">Loading Women Safety Protection Profile...</p>
+        <p className="text-sm font-semibold text-surface-400">Loading Safety Protection Profile...</p>
       </div>
     );
   }
@@ -586,7 +586,7 @@ export default function WomenSafety() {
             </div>
             <div>
               <h1 className="text-2xl font-black tracking-tight text-surface-100 flex items-center gap-2">
-                WOMEN SAFETY
+                SAFETY
                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/30">
                   WS-1 Emergency Protection
                 </span>
@@ -1086,7 +1086,7 @@ export default function WomenSafety() {
               </p>
               {!isProfileComplete && (
                 <p className="text-xs font-semibold text-rose-400">
-                  * You must complete your Women Safety profile (Emergency Mobile, Location Consent, and 2+ Contacts) before SOS can be activated.
+                  * You must complete your Safety profile (Emergency Mobile, Location Consent, and 2+ Contacts) before SOS can be activated.
                 </p>
               )}
             </div>
@@ -1237,7 +1237,7 @@ export default function WomenSafety() {
                       Allow NAVISCAPE to share my current location with my trusted contacts during an emergency.
                     </p>
                     <p className="text-[11px] text-surface-400">
-                      Location-sharing consent is required before your Women Safety profile is marked as complete.
+                      Location-sharing consent is required before your Safety profile is marked as complete.
                       Consent defaults to disabled and can be revoked at any time.
                     </p>
                   </div>

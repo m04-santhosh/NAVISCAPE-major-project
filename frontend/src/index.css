@@ -1,55 +1,83 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    @apply bg-surface-950 text-surface-100 font-sans antialiased;
-    min-height: 100vh;
+  :root {
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-top: env(safe-area-inset-top, 0px);
   }
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { @apply bg-surface-900; }
-  ::-webkit-scrollbar-thumb { @apply bg-surface-600 rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-surface-500; }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-100 antialiased selection:bg-cyan-500/30 selection:text-cyan-200;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-950/80;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-700/60 rounded-full hover:bg-surface-600/80 transition-colors;
+  }
 }
 
 @layer components {
+  /* Glassmorphism & Panel Cards */
   .glass-card {
-    @apply bg-surface-800/60 backdrop-blur-sm border border-surface-700/40 rounded-xl;
+    @apply bg-surface-900/85 backdrop-blur-xl border border-surface-700/50 rounded-2xl shadow-xl shadow-black/20 transition-all duration-200;
   }
-  .glass-card-light {
-    @apply bg-white/80 backdrop-blur-sm border border-surface-200 rounded-xl;
+  .glass-card-hover {
+    @apply glass-card hover:border-surface-600/70 hover:shadow-2xl hover:shadow-cyan-950/20 hover:-translate-y-0.5;
+  }
+  .glass-panel {
+    @apply bg-surface-900/90 backdrop-blur-2xl border border-surface-800/80 shadow-2xl;
   }
 
+  /* Form Controls */
+  .input-field {
+    @apply w-full px-4 py-3 min-h-[44px] rounded-xl bg-surface-800/90 border border-surface-700/70 text-surface-100 placeholder-surface-400 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all duration-200 text-sm font-medium;
+  }
+
+  /* Standard Buttons */
   .btn-primary {
-    @apply px-6 py-3 rounded-xl font-semibold text-white bg-primary-600 hover:bg-primary-500 transition-colors duration-200 shadow-md;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] rounded-xl font-bold text-sm text-surface-950 bg-cyan-400 hover:bg-cyan-300 active:scale-[0.98] transition-all duration-200 shadow-lg shadow-cyan-500/20 disabled:opacity-50 disabled:pointer-events-none;
   }
   .btn-secondary {
-    @apply px-6 py-3 rounded-xl font-medium text-surface-300 border border-surface-600 hover:border-surface-500 hover:text-surface-100 transition-colors duration-200;
+    @apply inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] rounded-xl font-semibold text-sm text-surface-200 bg-surface-800/80 border border-surface-700/80 hover:bg-surface-700/80 hover:text-white active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none;
   }
-  .input-field {
-    @apply w-full px-4 py-3 rounded-xl bg-surface-800/80 border border-surface-600 text-surface-100 placeholder-surface-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 outline-none transition-colors duration-200;
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] rounded-xl font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 active:scale-[0.98] transition-all duration-200 shadow-lg shadow-rose-600/30 disabled:opacity-50 disabled:pointer-events-none;
   }
-  .stat-card {
-    @apply glass-card p-6 hover:border-surface-600 transition-colors duration-200;
-  }
-  .nav-link {
-    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-surface-400 hover:text-surface-200 hover:bg-surface-800/80 transition-colors duration-200;
-  }
-  .nav-link-active {
-    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-primary-400 bg-primary-500/10 border border-primary-500/20;
-  }
+
+  /* Badges */
   .badge {
-    @apply px-3 py-1 rounded-full text-xs font-semibold;
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold tracking-wide border;
   }
-  .badge-low { @apply bg-green-500/20 text-green-400; }
-  .badge-medium { @apply bg-yellow-500/20 text-yellow-400; }
-  .badge-high { @apply bg-orange-500/20 text-orange-400; }
-  .badge-critical { @apply bg-red-500/20 text-red-400; }
+  .badge-low { @apply bg-emerald-500/10 text-emerald-400 border-emerald-500/30; }
+  .badge-medium { @apply bg-amber-500/10 text-amber-400 border-amber-500/30; }
+  .badge-high { @apply bg-rose-500/10 text-rose-400 border-rose-500/30; }
+  .badge-critical { @apply bg-red-600/20 text-red-300 border-red-500/50 animate-pulse; }
+  .badge-cyan { @apply bg-cyan-500/10 text-cyan-300 border-cyan-500/30; }
 }
 
 /* Light mode overrides */
@@ -57,10 +85,36 @@
   @apply bg-surface-50 text-surface-900;
 }
 
-/* Leaflet overrides */
-.leaflet-container { z-index: 1; }
+/* Leaflet overrides for responsive touch map */
+.leaflet-container {
+  z-index: 1;
+  font-family: inherit !important;
+}
 @media (min-width: 1024px) {
-  .leaflet-container { border-radius: 1rem; }
+  .leaflet-container { border-radius: 1.25rem; }
 }
 .leaflet-control-container .leaflet-routing-container { display: none !important; }
-.leaflet-control-zoom { border-radius: 12px !important; overflow: hidden; }
+.leaflet-control-zoom {
+  border-radius: 12px !important;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3) !important;
+}
+.leaflet-bar a {
+  background-color: rgba(15, 23, 42, 0.85) !important;
+  color: #06b6d4 !important;
+  border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+}
+.leaflet-bar a:hover {
+  background-color: rgba(30, 41, 59, 0.95) !important;
+  color: #22d3ee !important;
+}
+
+/* Utility to account for safe area insets on iOS devices */
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+.pt-safe {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+
