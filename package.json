@@ -1,0 +1,26 @@
+{
+  "name": "naviscape-major-project",
+  "version": "1.0.0",
+  "description": "An AI-powered navigation platform combining LSTM-based traffic prediction, XGBoost risk analysis, and graph-based route optimization. Built as a final-year BE AI & Data Science project.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "backend": "cd backend && python -m uvicorn app.main:app --reload",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/m04-santhosh/NAVISCAPE-major-project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/m04-santhosh/NAVISCAPE-major-project/issues"
+  },
+  "homepage": "https://github.com/m04-santhosh/NAVISCAPE-major-project#readme",
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

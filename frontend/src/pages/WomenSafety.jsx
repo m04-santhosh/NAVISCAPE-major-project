@@ -83,6 +83,9 @@ export default function WomenSafety() {
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
   const [resolvingEmergency, setResolvingEmergency] = useState(false);
+  const [whatsappStatus, setWhatsappStatus] = useState({});
+  const [whatsappAlerts, setWhatsappAlerts] = useState(null);
+
 
   const fetchOverview = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
@@ -564,6 +567,7 @@ export default function WomenSafety() {
   }
 
   const contacts = overview?.trusted_contacts || [];
+  const contactsCount = contacts.length;
   const hasMobile = Boolean(overview?.has_emergency_mobile);
   const hasConsent = Boolean(overview?.location_sharing_consent);
   const isProfileComplete = Boolean(overview?.is_profile_complete ?? (contacts.length >= 1 && hasMobile && hasConsent));
